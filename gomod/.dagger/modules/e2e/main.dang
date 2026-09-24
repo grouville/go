@@ -79,6 +79,44 @@ type E2e {
   }
 
   """
+  Module existence uses the same ownership rules as ordered file listings,
+  including when the only Go files belong to ignored or nested directories.
+  """
+  fileMembershipCheck(ws: Workspace!): Void @check {
+    let root = "discovery-membership-fixture"
+    let ignored = directory
+      .withNewFile("go.mod", "module example.com/membership\n\ngo 1.26.1\n")
+      .withNewFile("testdata/ignored.go", "package ignored\n")
+      .withNewFile("_ignored/ignored.go", "package ignored\n")
+      .withNewFile(".ignored/ignored.go", "package ignored\n")
+      .withNewFile("_ignored.go", "package ignored\n")
+      .withNewFile("nested/go.mod", "module example.com/nested\n\ngo 1.26.1\n")
+      .withNewFile("nested/only.go", "package nested\n")
+    let empty = ws.withDirectory(root, ignored)
+    let mod = gomod.at(root)
+    assert(mod.isGoModule(empty) == false, "nested or ignored files made the parent a module")
+    assert(mod.ownFiles(empty, "*.go") == [], "nested or ignored files belonged to the parent")
+    assert(gomod.at(root + "/nested").isGoModule(empty), "a nested module lost its own files")
+
+    # Directory traversal order is not full path order: foo.go sorts before
+    # foo/z.go, even if the walker visits the foo directory first.
+    let populated = ws.withDirectory(
+      root,
+      ignored
+        .withNewFile("z.go", "package membership\n")
+        .withNewFile("foo/z.go", "package foo\n")
+        .withNewFile("foo.go", "package membership\n"),
+    )
+    assert(mod.isGoModule(populated), "adding an owned file did not discover the module")
+    assert(
+      mod.ownFiles(populated, "*.go") == [root + "/foo.go", root + "/foo/z.go", root + "/z.go"],
+      "public file ordering or ownership changed",
+    )
+    assert(mod.isGoModule(empty) == false, "removing owned files left stale module membership")
+    null
+  }
+
+  """
   One selection syntax for every tool. These are the cases each tool used to
   assert separately.
   """

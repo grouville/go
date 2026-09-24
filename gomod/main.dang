@@ -375,7 +375,7 @@ type GoMod {
   """
   isGoModule(ws: Workspace!): Boolean! {
     ws.file("/" + subpath("go.mod")).contents.match(`(?m)^[ \t]*module([ \t(]|$)`) != null
-      and ownFiles(ws, "*.go").length > 0
+      and unsortedOwnFiles(ws, "*.go").length > 0
   }
 
   """
@@ -383,15 +383,19 @@ type GoMod {
   and names starting with "." or "_" are left out, as Go leaves them out.
   """
   ownFiles(ws: Workspace!, glob: String!): [String!]! {
+    sorted(unsortedOwnFiles(ws, glob))
+  }
+
+  # Membership does not require ordering. Keep module-existence checks out of
+  # the insertion sort used to order public file listings.
+  let unsortedOwnFiles(ws: Workspace!, glob: String!): [String!]! {
     let nested = nestedRoots(ws)
-    sorted(
-      ws
-        .glob(subpath("**/" + glob))
-        .filter { file => file.hasSuffix("/") == false }
-        .map { file => file.trimPrefix("/").trimPrefix("./") }
-        .filter { file => nested.any { root => file.hasPrefix(root + "/") } == false }
-        .filter { file => goIgnores(relative(file)) == false },
-    )
+    ws
+      .glob(subpath("**/" + glob))
+      .filter { file => file.hasSuffix("/") == false }
+      .map { file => file.trimPrefix("/").trimPrefix("./") }
+      .filter { file => nested.any { root => file.hasPrefix(root + "/") } == false }
+      .filter { file => goIgnores(relative(file)) == false }
   }
 
   """
