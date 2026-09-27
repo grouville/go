@@ -15,9 +15,15 @@ type Go {
   """
   base: Container
 
+  """
+  Custom Go base address. Its Container is resolved only when preparing an
+  execution container, in the workspace where the address was configured.
+  """
+  baseAddress: Address
+
   new(
     """
-    Go version for every module, overriding go.mod. Ignored when base is set.
+    Go version for every module, overriding go.mod. Ignored when base or baseAddress is set.
     """
     version: String = null,
     """
@@ -44,20 +50,30 @@ type Go {
     Where to mount the workspace in Go containers. Defaults to "/src/<workspace name>".
     """
     mountPath: String = null,
+    """
+    Address of a custom Go base. Resolved only for execution, so discovery
+    does not run its producer. Cannot be combined with base. The target must
+    return a Container with a Go toolchain; its errors surface when used.
+    """
+    baseAddress: Address = null,
   ) {
     if ((mountPath ?? "/").hasPrefix("/") == false) {
       raise "mountPath must be an absolute container path: " + (mountPath ?? "")
+    } else if (base != null and baseAddress != null) {
+      raise "base and baseAddress cannot both be set"
     } else {
-      self.warnings = if (version != null and base != null) {
+      self.warnings = if (version != null and (base != null or baseAddress != null)) {
         [
           "version \"" + version
-            + "\" is ignored because base was set: the base image supplies its own Go toolchain",
+            + "\" is ignored because " + (if (base != null) { "base" } else { "baseAddress" })
+            + " was set: the base image supplies its own Go toolchain",
         ]
       } else {
         []
       }
-      self.version = if (base == null) { version } else { null }
+      self.version = if (base == null and baseAddress == null) { version } else { null }
       self.base = base
+      self.baseAddress = baseAddress
       self.includeExtraFiles = includeExtraFiles
       self.test = test
       self.generate = generate
@@ -177,6 +193,7 @@ type Go {
       configuredVersion: version,
       warnings: warnings,
       baseImage: base,
+      baseImageAddress: baseAddress,
       includeExtraFiles: includeExtraFiles,
       testPatterns: test,
       generatePatterns: generate,
@@ -269,6 +286,9 @@ type GoModule {
   Base image used by this module's Go containers, as supplied by the caller.
   """
   let baseImage: Container
+
+  # Keep the caller-bound address; do not resolve during module/test discovery.
+  let baseImageAddress: Address
 
   """
   Extra workspace files mounted for Go commands, as include patterns.
@@ -435,7 +455,7 @@ type GoModule {
   Go version this module runs under. Null with a custom base.
   """
   version(ws: Workspace!): String {
-    if (baseImage == null) { toolchainVersion(ws) } else { null }
+    if (baseImage == null and baseImageAddress == null) { toolchainVersion(ws) } else { null }
   }
 
   let toolchainVersion(ws: Workspace!): String! {
@@ -446,11 +466,12 @@ type GoModule {
   Go container for this module, before source is added.
   """
   base(ws: Workspace!): Container! {
+    let customBase = if (baseImageAddress == null) { baseImage } else { baseImageAddress.container }
     prepareBase(
-      if (baseImage == null) {
+      if (customBase == null) {
         gomod.goContainer(toolchainVersion(ws))
       } else {
-        gomod.withGoCaches(baseImage.withoutEntrypoint)
+        gomod.withGoCaches(customBase.withoutEntrypoint)
       },
     )
   }
