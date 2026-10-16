@@ -751,15 +751,11 @@ type GoModule {
     if (files.length == 0) {
       empty
     } else {
-      # One search over the module tree, matched back to the package's files
-      # below. The search is the same for every package, so it runs once.
-      # Searching a subdirectory or the files by name would be narrower, but
-      # fails on a workspace built with withDirectory.
-      let matches = testMatches(ws)
+      # Search immutable files so workspace overlays are visible, while keeping
+      # the same matcher and file order as module-wide discovery.
       files
         .reduce(empty) { names, file =>
-          names + matches
-            .filter { match => match.filePath.trimPrefix("/").trimPrefix("./") == file }
+          names + ws.file("/" + file).search(pattern: testPattern).{{matchedLines}}
             .map { match =>
               match.matchedLines.trimPrefix("func ").split("(").takeFirst(1).join("")
             }
@@ -773,9 +769,11 @@ type GoModule {
     ws.search(
       paths: [if (path == ".") { "/" } else { "/" + path }],
       globs: ["*_test.go"],
-      pattern: `^func (Test([^a-z(]\w*)?\(\s*\w+\s+\*testing\.T\s*\)|Fuzz([^a-z(]\w*)?\(\s*\w+\s+\*testing\.F\s*\)|Example([^a-z(]\w*)?\(\s*\))`,
+      pattern: testPattern,
     ).{{filePath, matchedLines}}
   }
+
+  let testPattern: Regexp! = `^func (Test([^a-z(]\w*)?\(\s*\w+\s+\*testing\.T\s*\)|Fuzz([^a-z(]\w*)?\(\s*\w+\s+\*testing\.F\s*\)|Example([^a-z(]\w*)?\(\s*\))`
 
   # Byte-order sort, as Go's sort.Strings.
   let sorted(items: [String!]!): [String!]! {

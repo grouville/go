@@ -263,6 +263,7 @@ type GoDev {
         func ExampleAlpha() {}
         func Examplefoo() {}
       ``` + "\n")
+      .withNewFile("unicode_test.go", "package root\nimport \"testing\"\nfunc TestÉÉ(t *testing.T) {}\nfunc Test正常(t *testing.T) {}\nfunc TestParameter(т *testing.T) {}\n")
       .withNewFile("constrained_test.go", "//go:build never\n\npackage root\nimport \"testing\"\nfunc TestConstrained(t *testing.T) {}\n")
       .withNewFile("sub/b_test.go", "package sub\nimport \"testing\"\nfunc TestBeta(t *testing.T) {}\nfunc TestAlpha(t *testing.T) {}\n")
       .withNewFile("examples/c_test.go", "package examples\nfunc Example() {}\n")
@@ -278,7 +279,7 @@ type GoDev {
     )
     let rootNames = found.get(key: ".").tests(rooted).keys
     assert(
-      rootNames == ["TestAlpha", "FuzzAlpha", "ExampleAlpha", "TestConstrained"],
+      rootNames == ["TestAlpha", "FuzzAlpha", "ExampleAlpha", "TestConstrained", "TestÉÉ", "Test正常", "TestParameter"],
       "static test discovery found: " + rootNames.join(", "),
     )
     let subNames = found.get(key: "sub").tests(rooted).keys
