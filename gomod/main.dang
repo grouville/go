@@ -543,8 +543,37 @@ type GoMod {
   line, and it holds Go files that Go would read.
   """
   isGoModule(ws: Workspace!): Boolean! {
-    ws.file("/" + subpath("go.mod")).contents.match(`(?m)^[ \t]*module([ \t(]|$)`) != null
-      and ownFiles(ws, "*.go").length > 0
+    if (ws.file("/" + subpath("go.mod")).contents.match(`(?m)^[ \t]*module([ \t(]|$)`) == null) {
+      false
+    } else {
+      let nested = nestedRootSet(ws)
+      ws.glob(subpath("**/*.go")).any { raw =>
+        let file = raw.trimPrefix("/").trimPrefix("./")
+        raw.hasSuffix("/") == false and ownsFile(file, nested)
+      }
+    }
+  }
+
+  let nestedRootSet(ws: Workspace!): Map[Boolean!]! {
+    let empty: Map[Boolean!]! = [:]
+    nestedRoots(ws).reduce(empty) { roots, root => roots.with(root, true) }
+  }
+
+  let ownsFile(file: String!, nested: Map[Boolean!]!): Boolean! {
+    if (goIgnores(relative(file))) {
+      false
+    } else if (nested.isEmpty) {
+      true
+    } else {
+      let parent = file.split("/").dropLast(1).reduce({{
+        directory: "",
+        nested: false
+      }}) { state, segment =>
+        let dir = if (state.directory == "") { segment } else { state.directory + "/" + segment }
+        {{directory: dir, nested: state.nested or nested.has(dir)}}
+      }
+      parent.nested == false
+    }
   }
 
   """
@@ -552,14 +581,13 @@ type GoMod {
   and names starting with "." or "_" are left out, as Go leaves them out.
   """
   ownFiles(ws: Workspace!, glob: String!): [String!]! {
-    let nested = nestedRoots(ws)
+    let nested = nestedRootSet(ws)
     sorted(
       ws
         .glob(subpath("**/" + glob))
         .filter { file => file.hasSuffix("/") == false }
         .map { file => file.trimPrefix("/").trimPrefix("./") }
-        .filter { file => nested.any { root => file.hasPrefix(root + "/") } == false }
-        .filter { file => goIgnores(relative(file)) == false },
+        .filter { file => ownsFile(file, nested) },
     )
   }
 
@@ -589,7 +617,11 @@ type GoMod {
   let sorted(items: [String!]!): [String!]! {
     let empty: [String!]! = []
     items.reduce(empty) { acc, item =>
-      acc.takeWhile { x => x <= item } + [item] + acc.dropWhile { x => x <= item }
+      if (acc.length == 0 or acc.takeLast(1).join("") <= item) {
+        acc + [item]
+      } else {
+        acc.takeWhile { x => x <= item } + [item] + acc.dropWhile { x => x <= item }
+      }
     }
   }
 

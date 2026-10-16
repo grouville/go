@@ -245,6 +245,19 @@ type GoDev {
     let skipped = go(version: "1.26.1", test: ["!" + modPath]).packages(ws).keys
     assert(containsPath(skipped, modPath) == false, "a skipped module offered its test package")
 
+    # Host-workspace overlays must affect both package and test discovery.
+    let overlayFile = noPackagesFixturePath + "/overlay_test.go"
+    let overlay = ws.withNewFile(overlayFile, "package nopackages\nimport \"testing\"\nfunc TestOverlay(t *testing.T) {}\n")
+    assert(
+      tool.packages(overlay).get(key: noPackagesFixturePath).tests(overlay).keys == ["TestOverlay"],
+      "an overlay test was missing from discovery",
+    )
+    let removed = overlay.withNewFile(overlayFile, "package nopackages\n")
+    assert(
+      tool.packages(removed).keys.contains(noPackagesFixturePath) == false,
+      "replacing an overlay kept a removed test package",
+    )
+
     # Names come from the source: tests, fuzz targets and examples count;
     # TestMain, a lowercase suffix and the wrong signature do not; testdata is
     # left out; a nested module's tests are its own package's; build

@@ -319,6 +319,33 @@ type E2e {
   }
 
   """
+  File discovery preserves byte order and leaves ignored files and nested modules
+  out of the parent, including when checking whether the parent has any Go code.
+  """
+  ownFilesCheck: Void @check {
+    let ignored = directory
+      .withNewFile("go.mod", "module example.com/root\n")
+      .withNewFile("nested/go.mod", "module example.com/nested\n")
+      .withNewFile("nested/only.go", "package nested\n")
+      .withNewFile("testdata/fixture.go", "package fixture\n")
+      .withNewFile("_ignored/ignored.go", "package ignored\n")
+      .withNewFile(".hidden/hidden.go", "package hidden\n")
+      .withNewFile("directory.go/readme.txt", "not Go code\n")
+      .asWorkspace
+    assert(gomod.at(".").isGoModule(ignored) == false, "ignored or nested code made the parent a module")
+    assert(gomod.at("nested").isGoModule(ignored), "nested module lost its own code")
+    let mixed = ignored
+      .withNewFile("a/item.go", "package a\n")
+      .withNewFile("a.go", "package root\n")
+      .withNewFile("Z.go", "package root\n")
+      .withNewFile("é.go", "package root\n")
+    let files = gomod.at(".").ownFiles(mixed, "*.go")
+    assert(files == ["Z.go", "a.go", "a/item.go", "é.go"], "owned file order or exclusions changed: " + files.join(", "))
+    assert(gomod.at(".").isGoModule(mixed), "valid parent Go code was missed")
+    null
+  }
+
+  """
   The source scanner's own unit tests.
   """
   helperCheck(ws: Workspace!): Void @check {
