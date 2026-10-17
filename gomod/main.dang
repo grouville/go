@@ -53,10 +53,10 @@ type Gomod {
     # listing modules never builds or runs the scanner.
     ws
       .findRoots(markers: ["go.mod"])
-      .map { root => workspaceRootPath(ws, root) }
-      .filter { modPath => at(modPath).isGoModule(ws) }
-      .filter { modPath => pathIncluded(ws, modPath, include, exclude) }
-      .map { modPath => at(modPath) }
+      .map { root => at(workspaceRootPath(ws, root)) }.{{path, valid: isGoModule(ws: ws)}}
+      .filter { found => found.valid }
+      .filter { found => pathIncluded(ws, found.path, include, exclude) }
+      .map { found => at(found.path) }
   }
 
   """
