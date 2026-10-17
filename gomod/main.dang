@@ -625,14 +625,7 @@ type GoMod {
 
   # Byte-order sort, as Go's sort.Strings.
   let sorted(items: [String!]!): [String!]! {
-    let empty: [String!]! = []
-    items.reduce(empty) { acc, item =>
-      if (acc.length == 0 or acc.takeLast(1).join("") <= item) {
-        acc + [item]
-      } else {
-        acc.takeWhile { x => x <= item } + [item] + acc.dropWhile { x => x <= item }
-      }
-    }
+    sortStrings(items)
   }
 
   """

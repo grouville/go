@@ -327,6 +327,10 @@ type E2e {
       .withNewFile("go.mod", "module example.com/root\n")
       .withNewFile("nested/go.mod", "module example.com/nested\n")
       .withNewFile("nested/only.go", "package nested\n")
+      .withNewFile("n[1]/go.mod", "module example.com/n1\n")
+      .withNewFile("n[1]/hidden.go", "package hidden\n")
+      .withNewFile("special+root/go.mod", "module example.com/special\n")
+      .withNewFile("special+root/hidden.go", "package hidden\n")
       .withNewFile("testdata/fixture.go", "package fixture\n")
       .withNewFile("_ignored/ignored.go", "package ignored\n")
       .withNewFile(".hidden/hidden.go", "package hidden\n")
@@ -342,6 +346,30 @@ type E2e {
     let files = gomod.at(".").ownFiles(mixed, "*.go")
     assert(files == ["Z.go", "a.go", "a/item.go", "é.go"], "owned file order or exclusions changed: " + files.join(", "))
     assert(gomod.at(".").isGoModule(mixed), "valid parent Go code was missed")
+
+    let cases = [
+      {{path: "pkg/.hidden.go", owned: false}},
+      {{path: "pkg/_ignored.go", owned: false}},
+      {{path: "pkg/.hidden/item.go", owned: false}},
+      {{path: "pkg/_ignored/item.go", owned: false}},
+      {{path: "pkg/testdata/item.go", owned: false}},
+      {{path: "pkg/testdata.go", owned: true}},
+      {{path: "pkg/testdatabase/item.go", owned: true}},
+      {{path: "testdata-extra/item.go", owned: true}},
+      {{path: "TESTDATA/item.go", owned: true}},
+      {{path: "n1/allowed.go", owned: true}},
+      {{path: "specialroot/allowed.go", owned: true}},
+      {{path: "nested-sibling/allowed.go", owned: true}},
+      {{path: "testdata\n/item.go", owned: true}},
+      {{path: "\n_hidden.go", owned: true}},
+      {{path: "é/item.go", owned: true}},
+    ]
+    let extended = cases.reduce(mixed) { ws, item => ws.withNewFile(item.path, "package fixture\n") }
+    let mismatches = cases.filter { item =>
+      let actual = gomod.at(".").ownFiles(extended, item.path)
+      actual != (if (item.owned) { [item.path] } else { [] })
+    }
+    assert(mismatches.length == 0, "path segment policy changed")
     null
   }
 
