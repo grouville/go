@@ -182,12 +182,12 @@ type Go {
   """
   packages(ws: Workspace!): GoPackages! {
     let empty: [String!]! = []
-    # Discover per-module paths concurrently, then flatten them in module order.
+    # Keep the known owners so packages do not rediscover their modules.
+    let found = modules(ws).{{path, paths: packagePaths(ws: ws)}}
     GoPackages(
-      paths: sorted(
-        modules(ws).{{paths: packagePaths(ws: ws)}}
-          .reduce(empty) { all, mod => all + mod.paths },
-      ),
+      paths: sorted(found.reduce(empty) { all, mod => all + mod.paths }),
+      moduleRoots: found.map { mod => mod.path },
+      moduleLayoutDigest: lib.moduleLayoutDigest(ws),
       mountPath: workspaceMountPath(ws),
       tool: self,
     )
@@ -257,11 +257,34 @@ type GoPackages @collection {
 
   let tool: Go!
 
+  let moduleRoots: [String!]
+  let moduleLayoutDigest: String
+
+  # Use the deepest discovered root on a path boundary. Retaining these few
+  # roots avoids a workspace round trip and nested SDK call for every package.
+  let moduleRoot(path: String!): String {
+    let root = (moduleRoots ?? []).reduce("") { owner, root =>
+      if ((root == "." or path == root or path.hasPrefix(root + "/"))
+        and (owner == "" or owner == "." or root.hasPrefix(owner + "/"))) {
+        root
+      } else {
+        owner
+      }
+    }
+    if (root == "") { null } else { root }
+  }
+
   """
   The package in this directory.
   """
   package(path: String!): GoPackage! @get {
-    GoPackage(path: path, mountPath: mountPath, tool: tool)
+    GoPackage(
+      path: path,
+      moduleRoot: moduleRoot(path),
+      moduleLayoutDigest: moduleLayoutDigest,
+      mountPath: mountPath,
+      tool: tool,
+    )
   }
 
   # The modules holding the selected packages, each once.
@@ -349,8 +372,19 @@ type GoPackage {
 
   let tool: Go!
 
+  let moduleRoot: String
+  let moduleLayoutDigest: String
+
   let module(ws: Workspace!): GoModule! {
-    tool.packageModule(ws, path, mountPath)
+    # A caller can use the package with an edited workspace. Reuse ownership
+    # only while its go.mod snapshot still matches that workspace.
+    if (moduleRoot != null
+      and moduleLayoutDigest != null
+      and moduleLayoutDigest == tool.lib.moduleLayoutDigest(ws)) {
+      tool.goModuleAt(moduleRoot ?? path, mountPath)
+    } else {
+      tool.packageModule(ws, path, mountPath)
+    }
   }
 
   """

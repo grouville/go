@@ -326,6 +326,20 @@ type GoDev {
   }
 
   """
+  A retained package follows module boundaries in its execution workspace.
+  """
+  packageLayoutRebindCheck: Void @check {
+    let before = directory
+      .withNewFile("go.mod", "module example.com/layout\n\ngo 1.26.1\n")
+      .withNewFile("sub/layout_test.go", "package sub\nimport \"testing\"\nfunc TestReboundLayout(t *testing.T) {}\n")
+      .asWorkspace
+    let pkg = go(version: "1.26.1").packages(before).get(key: "sub")
+    let after = before.withNewFile("/sub/go.mod", "module example.com/layout/sub\n\ngo 1.26.1\n")
+    run(pkg.tests(after).get(key: "TestReboundLayout").test(after))
+    null
+  }
+
+  """
   A package has a binary when it is a main package selected by build. Main packages
   are found by searching the source; binaries are named as go build names
   them; a batch builds every selected package, across modules; build patterns

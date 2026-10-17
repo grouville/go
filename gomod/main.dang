@@ -60,6 +60,16 @@ type Gomod {
   }
 
   """
+  A digest of the workspace's go.mod snapshot.
+
+  A sparse native snapshot lets consumers retain discovered ownership while
+  detecting layout edits before reusing it with another workspace.
+  """
+  moduleLayoutDigest(ws: Workspace!): String! {
+    ws.directory("/", include: ["**/go.mod"]).digest
+  }
+
+  """
   The Go module containing a workspace path.
 
   With findUp the path may be any directory inside a module; without it the
