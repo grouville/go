@@ -20,6 +20,47 @@ type E2e {
     null
   }
 
+  """
+  A test-source snapshot preserves the module layout of its host workspace.
+  """
+  layoutSnapshotCheck(ws: Workspace!): Void @check {
+    let source = ws.directory("/", include: ["**/go.mod", "**/*_test.go"])
+    assert(
+      gomod.moduleLayoutDigest(ws) == gomod.moduleLayoutDigest(source.asWorkspace),
+      "the same module layout changed between host and native test snapshot",
+    )
+    null
+  }
+
+  """
+  Ownership keys change with module boundaries and ignore unrelated source data.
+  """
+  layoutKeyCheck: Void @check {
+    let source = directory
+      .withNewFile("go.mod", "module example.com/root\n")
+      .withNewFile("a/go.mod", "module example.com/root/a\n")
+      .withNewFile("a/item_test.go", "package a\n")
+    let key = gomod.moduleLayoutDigest(source.asWorkspace)
+    let changed = source
+      .withNewFile("go.mod", "module example.com/renamed\n", permissions: 384)
+      .withNewFile("a/item_test.go", "package a\n// edited test source\n")
+      .withNewDirectory("unrelated/empty")
+    assert(gomod.moduleLayoutDigest(changed.asWorkspace) == key, "source data changed the ownership key")
+    assert(
+      gomod.moduleLayoutDigest(source.asWorkspace.withWorkdir("a")) == key,
+      "workspace cwd changed the ownership key",
+    )
+    let added = source.withNewFile("a/nested/go.mod", "module example.com/root/a/nested\n")
+    assert(gomod.moduleLayoutDigest(added.asWorkspace) != key, "a nested module did not change the ownership key")
+    let moved = source.withoutFile("a/go.mod").withNewFile("ab/go.mod", "module example.com/root/ab\n")
+    assert(gomod.moduleLayoutDigest(moved.asWorkspace) != key, "moving a module did not change the ownership key")
+    assert(
+      gomod.moduleLayoutDigest(source.withoutFile("a/go.mod").asWorkspace) != key,
+      "removing a module did not change the ownership key",
+    )
+    null
+  }
+
   let selects(patterns: [String!]!, path: String!): Boolean! {
     let direct = gomod.at(path).selected(patterns)
     let expected = if (direct) { [path] } else { [] }
