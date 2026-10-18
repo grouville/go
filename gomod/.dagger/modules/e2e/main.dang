@@ -401,6 +401,71 @@ type E2e {
     null
   }
 
+  let comparePackageFacts(ws: Workspace!): Void {
+    let patterns = ["a", "child/**"]
+    let expected = gomod.modules(ws).{{path}}.map { mod => mod.path }
+    let facts = gomod.packageFacts(ws, patterns).{{path, prefix, skipTest, files}}
+    assert(facts.map { fact => fact.path } == expected, "batched discovery changed modules or their order")
+    facts.each { fact =>
+      let mod = gomod.at(fact.path)
+      assert(fact.files == mod.ownFiles(ws, "*.go"), "batched ownership differs for " + fact.path)
+      assert(fact.prefix == mod.subpath(""), "batched discovery changed a module prefix")
+      assert(fact.skipTest == (mod.selected(patterns) == false), "batched discovery changed selection")
+    }
+    null
+  }
+
+  """
+  Batched package discovery agrees with module discovery and file ownership,
+  including invalid boundaries, ignored files, overlays and a non-root cwd.
+  """
+  packageFactsCheck(ws: Workspace!): Void @check {
+    comparePackageFacts(ws)
+    let source = directory
+      .withNewFile("go.mod", "module example.com/root\n")
+      .withNewFile("root.go", "package root\n")
+      .withNewFile("plain/leaf.go", "package plain\n")
+      .withNewFile("é.go", "package root\n")
+      .withNewFile("a/go.mod", "module example.com/a\n")
+      .withNewFile("a/item.go", "package a\n")
+      .withNewFile("a-b/go.mod", "module example.com/ab\n")
+      .withNewFile("a-b/item.go", "package ab\n")
+      .withNewFile("child/go.mod", "module example.com/child\n")
+      .withNewFile("child/item.go", "package child\n")
+      .withNewFile("child/deeper/go.mod", "module example.com/deeper\n")
+      .withNewFile("child/deeper/item.go", "package deeper\n")
+      .withNewFile("invalid/go.mod", "go 1.26.6\n")
+      .withNewFile("invalid/excluded.go", "package excluded\n")
+      .withNewFile("empty/go.mod", "module example.com/empty\n")
+      .withNewFile("ignored/go.mod", "module example.com/ignored\n")
+      .withNewFile("ignored/testdata/fixture.go", "package fixture\n")
+      .withNewFile("ignored/.hidden/item.go", "package hidden\n")
+      .withNewFile("ignored/_private/item.go", "package private\n")
+      .withNewFile("only-nested/go.mod", "module example.com/parent\n")
+      .withNewFile("only-nested/n/go.mod", "module example.com/nested\n")
+      .withNewFile("only-nested/n/item.go", "package nested\n")
+      .withNewFile("testdata/root_fixture.go", "package fixture\n")
+      .withNewFile(".hidden/item.go", "package hidden\n")
+      .withNewFile("_private/item.go", "package private\n")
+      .withNewFile("directory.go/readme.txt", "not Go code\n")
+    let native = source.asWorkspace
+    let changed = native.withNewFile("invalid/go.mod", "module example.com/nowvalid\n")
+    [
+      native, native.withWorkdir("child"), changed,
+      source.withoutFile("child/go.mod").asWorkspace.withWorkdir("child"),
+      source.withoutFile("go.mod").asWorkspace.withWorkdir("plain"),
+    ].each { current =>
+      comparePackageFacts(current)
+    }
+    let facts = gomod.packageFacts(native, []).{{path, files}}
+    assert(facts.length == 6, "invalid, empty or ignored modules were discovered")
+    let empty: [String!]! = []
+    let rootFiles = facts.filter { fact => fact.path == "." }.reduce(empty) { files, fact => files + fact.files }
+    assert(rootFiles == ["plain/leaf.go", "root.go", "é.go"], "nested or ignored files leaked into the root")
+    assert(gomod.packageFacts(changed, []).{{path}}.length == 7, "a newly valid overlaid module was missed")
+    null
+  }
+
   """
   The source scanner's own unit tests.
   """

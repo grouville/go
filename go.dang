@@ -190,11 +190,19 @@ type Go {
   packages(ws: Workspace!): GoPackages! {
     let empty: [String!]! = []
     # Keep the known owners so packages do not rediscover their modules.
-    let owners = modules(ws)
-    let found = owners.{{path, paths: packagePaths(ws: ws)}}
+    let mount = workspaceMountPath(ws)
+    let prepared = lib.packageFacts(ws, test).{{path, prefix, skipTest, files}}
+      .map { fact =>
+        GoPackageDiscovery(
+          owner: goModuleAt(fact.path, mount, fact.prefix, fact.skipTest),
+          files: fact.files,
+        )
+      }
+    let found = prepared.{{owner, paths(ws: ws)}}
+    let owners = found.map { row => row.owner }
     GoPackages(
       paths: sorted(found.reduce(empty) { all, mod => all + mod.paths }),
-      moduleRoots: found.map { mod => mod.path },
+      moduleRoots: owners.map { mod => mod.path },
       testSource: ws.directory("/", include: ["**/go.mod", "**/*_test.go"]),
       owners: owners,
       moduleLayoutDigest: lib.moduleLayoutDigest(ws),
@@ -773,10 +781,8 @@ type GoModule {
   # Workspace paths of this module's packages that have something to do: tests
   # to run, a main package to build, or go:generate commands to run. Each is
   # found by searching the source, so listing packages runs no container.
-  let packagePaths(ws: Workspace!): [String!]! {
-    # The module's files are listed once and shared: listing them is the
-    # costly part, and every kind of package is found among them.
-    let files = lib.at(path).ownFiles(ws, "*.go")
+  let packagePaths(ws: Workspace!, files: [String!]!): [String!]! {
+    # The library already validated ownership and listed these files.
     let empty: [String!]! = []
     let testDirs = if (skipTest) {
       empty
@@ -1254,4 +1260,14 @@ type GoTest {
 type GoGeneration {
   let container: Container!
   let value: String!
+}
+
+# Local discovery state; every module selection shares its validated file list.
+type GoPackageDiscovery {
+  owner: GoModule!
+  files: [String!]!
+
+  let paths(ws: Workspace!): [String!]! {
+    owner.packagePaths(ws, files)
+  }
 }

@@ -67,6 +67,46 @@ type Gomod {
     }
   }
 
+  # Validate modules and list their owned files in one module evaluation.
+  packageFacts(ws: Workspace!, testPatterns: [String!]!): [PackageFacts!]! {
+    let cwd = ws.cwd
+    let roots = ws.findRoots(markers: ["go.mod"])
+    let above = roots.filter { root => root == ".." or root.hasPrefix("../") }
+    # An enclosing module also owns code outside the cwd. Its other nested
+    # modules remain boundaries even when discovery does not report them.
+    let allRoots = if (above.length == 0) {
+      roots
+    } else {
+      let scope = resolveRootPath(cwd, above.takeFirst(1).join(""))
+      ws.findRoots(start: absolute(scope), markers: ["go.mod"])
+    }
+    let boundaries = rootIndex(
+      allRoots.map { root => resolveRootPath(cwd, root) },
+    )
+    roots.map { root => at(resolveRootPath(cwd, root)) }.{{path, files: validFiles(ws: ws, boundaries: boundaries)}}
+      .filter { found => found.files.length > 0 }
+      .map { found =>
+        let mod = at(found.path)
+        PackageFacts(
+          path: mod.path,
+          prefix: mod.subpath(""),
+          skipTest: mod.selected(testPatterns) == false,
+          files: found.files,
+        )
+      }
+  }
+
+  # Balanced merges avoid repeatedly copying a growing immutable map.
+  let rootIndex(paths: [String!]!): Map[Boolean!]! {
+    let empty: Map[Boolean!]! = [:]
+    if (paths.length < 2) {
+      paths.reduce(empty) { roots, path => roots.with(path, true) }
+    } else {
+      let middle = paths.length / 2
+      rootIndex(paths.takeFirst(middle)).merge(rootIndex(paths.dropFirst(middle)))
+    }
+  }
+
   # Keep selection policy here while selecting an entire discovered list.
   selectedPaths(paths: [String!]!, patterns: [String!]!): [String!]! {
     paths.filter { path => at(path).selected(patterns) }
@@ -233,10 +273,14 @@ type Gomod {
   is workspace-root-relative.
   """
   workspaceRootPath(ws: Workspace!, cwdPath: String!): String! {
+    resolveRootPath(ws.cwd, cwdPath)
+  }
+
+  let resolveRootPath(cwd: String!, cwdPath: String!): String! {
     let segments = cwdPath.split("/").filter { segment => segment != "" and segment != "." }
     let up = segments.filter { segment => segment == ".." }.length
     let down = segments.filter { segment => segment != ".." }
-    let resolved = ws.cwd.split("/").filter { segment => segment != "" }.dropLast(up) + down
+    let resolved = cwd.split("/").filter { segment => segment != "" }.dropLast(up) + down
 
     if (resolved.length == 0) { "." } else { resolved.join("/") }
   }
@@ -601,7 +645,8 @@ type GoMod {
         nested: false
       }}) { state, segment =>
         let dir = if (state.directory == "") { segment } else { state.directory + "/" + segment }
-        {{directory: dir, nested: state.nested or nested.has(dir)}}
+        let boundary = dir != path and (path == "." or dir.hasPrefix(path + "/")) and nested.has(dir)
+        {{directory: dir, nested: state.nested or boundary}}
       }
       parent.nested == false
     }
@@ -612,7 +657,19 @@ type GoMod {
   and names starting with "." or "_" are left out, as Go leaves them out.
   """
   ownFiles(ws: Workspace!, glob: String!): [String!]! {
-    let nested = nestedRootSet(ws)
+    filesWithBoundaries(ws, glob, nestedRootSet(ws))
+  }
+
+  let validFiles(ws: Workspace!, boundaries: Map[Boolean!]!): [String!]! {
+    let empty: [String!]! = []
+    if (ws.file("/" + subpath("go.mod")).contents.match(`(?m)^[ \t]*module([ \t(]|$)`) == null) {
+      empty
+    } else {
+      filesWithBoundaries(ws, "*.go", boundaries)
+    }
+  }
+
+  let filesWithBoundaries(ws: Workspace!, glob: String!, nested: Map[Boolean!]!): [String!]! {
     sorted(
       ws
         .glob(subpath("**/" + glob))
@@ -900,4 +957,12 @@ type ModuleFacts {
   path: String!
   prefix: String!
   skipTest: Boolean!
+}
+
+# File ownership and immutable settings returned by one discovery pass.
+type PackageFacts {
+  path: String!
+  prefix: String!
+  skipTest: Boolean!
+  files: [String!]!
 }
