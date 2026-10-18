@@ -252,6 +252,13 @@ type GoDev {
       tool.packages(overlay).get(key: noPackagesFixturePath).tests(overlay).keys == ["TestOverlay"],
       "an overlay test was missing from discovery",
     )
+    # Reusing a package with the same path and filename must read edited contents.
+    let retainedPackage = tool.packages(overlay).get(key: noPackagesFixturePath)
+    let renamed = overlay.withNewFile(overlayFile, "package nopackages\nimport \"testing\"\nfunc TestRenamed(t *testing.T) {}\n")
+    assert(
+      retainedPackage.tests(renamed).keys == ["TestRenamed"],
+      "a retained package reused names from the previous test-file contents",
+    )
     let removed = overlay.withNewFile(overlayFile, "package nopackages\n")
     assert(
       tool.packages(removed).keys.contains(noPackagesFixturePath) == false,

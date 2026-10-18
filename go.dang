@@ -791,16 +791,23 @@ type GoModule {
     if (files.length == 0) {
       empty
     } else {
-      # Search immutable files so workspace overlays are visible, while keeping
-      # the same matcher and file order as module-wide discovery.
-      files
-        .reduce(empty) { names, file =>
-          names + ws.file("/" + file).search(pattern: testPattern).{{matchedLines}}
-            .map { match =>
-              match.matchedLines.trimPrefix("func ").split("(").takeFirst(1).join("")
-            }
-        }
-        .uniq
+      # Search the selected workspace files together, preserving overlays and
+      # avoiding a separate immutable-file import for every file.
+      let matches = ws.search(
+        paths: files.map { file => "/" + file },
+        pattern: testPattern,
+      ).{{filePath, matchedLines}}
+      let initial: Map[[String!]!]! = [:]
+      let byFile = matches.reduce(initial) { groups, match =>
+        let file = match.filePath.trimPrefix("/").trimPrefix("./")
+        let name = match.matchedLines.trimPrefix("func ").split("(").takeFirst(1).join("")
+        groups.with(file, (groups.get(file) ?? empty) + [name])
+      }
+      # Ripgrep can deliver files in any order. Preserve filename order and
+      # the source order of matches within each file, then remove duplicates.
+      files.reduce(empty) { names, file =>
+        names + (byFile.get(file) ?? empty)
+      }.uniq
     }
   }
 
