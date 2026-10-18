@@ -168,9 +168,16 @@ type Go {
   ): [GoModule!]! {
     # A list rather than a collection: modules decide how a package is mounted
     # and which toolchain it gets, but they are not something to select.
-    lib
-      .modules(ws, include: include, exclude: exclude).{{path}}
-      .map { found => goModule(ws, found.path) }
+    let roots = lib.modules(ws, include: include, exclude: exclude).{{path}}.map { found => found.path }
+    lib.moduleFacts(roots, test).{{path, prefix, skipTest}}
+      .map { found =>
+        goModuleAt(
+          found.path,
+          workspaceMountPath(ws),
+          found.prefix,
+          found.skipTest,
+        )
+      }
       .filter { mod =>
         (includeSkipTest or mod.skipTest == false)
           and (includeSkipGenerate or mod.skipGenerate(ws) == false)
@@ -183,10 +190,12 @@ type Go {
   packages(ws: Workspace!): GoPackages! {
     let empty: [String!]! = []
     # Keep the known owners so packages do not rediscover their modules.
-    let found = modules(ws).{{path, paths: packagePaths(ws: ws)}}
+    let owners = modules(ws)
+    let found = owners.{{path, paths: packagePaths(ws: ws)}}
     GoPackages(
       paths: sorted(found.reduce(empty) { all, mod => all + mod.paths }),
       moduleRoots: found.map { mod => mod.path },
+      owners: owners,
       moduleLayoutDigest: lib.moduleLayoutDigest(ws),
       mountPath: workspaceMountPath(ws),
       tool: self,
@@ -222,9 +231,16 @@ type Go {
     goModuleAt(modPath, workspaceMountPath(ws))
   }
 
-  let goModuleAt(modPath: String!, mount: String!): GoModule! {
+  let goModuleAt(
+    modPath: String!,
+    mount: String!,
+    knownPrefix: String = null,
+    knownSkipTest: Boolean = null,
+  ): GoModule! {
     GoModule(
       path: modPath,
+      knownPrefix: knownPrefix,
+      knownSkipTest: knownSkipTest,
       configuredVersion: version,
       warnings: warnings,
       baseImage: base,
@@ -258,6 +274,7 @@ type GoPackages @collection {
   let tool: Go!
 
   let moduleRoots: [String!]
+  let owners: [GoModule!]
   let moduleLayoutDigest: String
 
   # Use the deepest discovered root on a path boundary. Retaining these few
@@ -278,9 +295,12 @@ type GoPackages @collection {
   The package in this directory.
   """
   package(path: String!): GoPackage! @get {
+    let root = moduleRoot(path)
+    let owner = (owners ?? []).find { mod => mod.path == (root ?? "") }
     GoPackage(
       path: path,
-      moduleRoot: moduleRoot(path),
+      moduleRoot: root,
+      knownModule: owner,
       moduleLayoutDigest: moduleLayoutDigest,
       mountPath: mountPath,
       tool: tool,
@@ -373,6 +393,7 @@ type GoPackage {
   let tool: Go!
 
   let moduleRoot: String
+  let knownModule: GoModule
   let moduleLayoutDigest: String
 
   let module(ws: Workspace!): GoModule! {
@@ -381,7 +402,7 @@ type GoPackage {
     if (moduleRoot != null
       and moduleLayoutDigest != null
       and moduleLayoutDigest == tool.lib.moduleLayoutDigest(ws)) {
-      tool.goModuleAt(moduleRoot ?? path, mountPath)
+      knownModule ?? tool.goModuleAt(moduleRoot ?? path, mountPath)
     } else {
       tool.packageModule(ws, path, mountPath)
     }
@@ -513,6 +534,9 @@ type GoModule {
   """
   path: String!
 
+  let knownPrefix: String
+  let knownSkipTest: Boolean
+
   let configuredVersion: String
   let warnings: [String!]!
 
@@ -570,7 +594,7 @@ type GoModule {
   Whether tests are skipped for this module.
   """
   skipTest: Boolean! {
-    lib.at(path).selected(testPatterns) == false
+    knownSkipTest ?? (lib.at(path).selected(testPatterns) == false)
   }
 
   """
@@ -830,7 +854,13 @@ type GoModule {
 
   # The workspace path of a package directory in this module.
   let packagePath(dir: String!): String! {
-    if (dir == ".") { path } else { lib.at(path).subpath(dir) }
+    if (dir == ".") {
+      path
+    } else if (knownPrefix != null) {
+      (knownPrefix ?? "") + dir
+    } else {
+      lib.at(path).subpath(dir)
+    }
   }
 
   """
@@ -990,11 +1020,11 @@ type GoModule {
     } else {
       let mains = markedFiles(ws, "main")
       let ignored = markedFiles(ws, "ignore")
-      files
+      let candidates = files
         .filter { f => mains.contains(f) and ignored.contains(f) == false }
         .map { f => packageDirectory(f) }
         .uniq
-        .filter { pkg => lib.at(pkg).selected(buildPatterns) }
+      lib.selectedPaths(candidates, buildPatterns)
     }
   }
 

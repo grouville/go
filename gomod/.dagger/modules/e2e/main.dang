@@ -21,7 +21,16 @@ type E2e {
   }
 
   let selects(patterns: [String!]!, path: String!): Boolean! {
-    gomod.at(path).selected(patterns)
+    let direct = gomod.at(path).selected(patterns)
+    let expected = if (direct) { [path] } else { [] }
+    assert(gomod.selectedPaths([path], patterns) == expected, "bulk selection differs for " + path)
+    let facts = gomod.moduleFacts([path], patterns).{{path, prefix, skipTest}}
+    assert(facts.length == 1, "module facts lost a path")
+    facts.each { fact =>
+      assert(fact.path == path, "module facts changed the path")
+      assert(fact.skipTest == (direct == false), "module facts changed selection")
+    }
+    direct
   }
 
   """
@@ -177,6 +186,12 @@ type E2e {
     assert(selects(["."], "."), "root selection failed")
     assert(selects(["."], "core") == false, "root selection leaked to another module")
     assert(selects(["docs"], "docs-tools") == false, "path prefix crossed a module boundary")
+    let facts = gomod.moduleFacts([".", "a/", "包", "a/"], [".", "包"]).{{path, prefix, skipTest}}
+    assert(facts.map { fact => fact.path } == [".", "a", "包", "a"], "module facts changed order or duplicates")
+    assert(facts.map { fact => fact.prefix } == ["", "a/", "包/", "a/"], "module facts changed prefixes")
+    assert(facts.map { fact => fact.skipTest } == [false, true, false, true], "module facts changed flags")
+    assert(gomod.moduleFacts([], []).{{path}}.length == 0, "empty module facts are not empty")
+    assert(gomod.selectedPaths(["a", "包", "a"], ["a"]) == ["a", "a"], "bulk selection changed order or duplicates")
     null
   }
 

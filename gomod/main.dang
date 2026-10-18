@@ -59,6 +59,19 @@ type Gomod {
       .map { found => at(found.path) }
   }
 
+  # Pure module facts in one call, rather than one call per package.
+  moduleFacts(paths: [String!]!, testPatterns: [String!]!): [ModuleFacts!]! {
+    paths.map { path =>
+      let mod = at(path)
+      ModuleFacts(path: mod.path, prefix: mod.subpath(""), skipTest: mod.selected(testPatterns) == false)
+    }
+  }
+
+  # Keep selection policy here while selecting an entire discovered list.
+  selectedPaths(paths: [String!]!, patterns: [String!]!): [String!]! {
+    paths.filter { path => at(path).selected(patterns) }
+  }
+
   """
   A digest of the workspace's go.mod snapshot.
 
@@ -872,4 +885,11 @@ type GoScope {
   Directories below `path` that nested projects lint instead.
   """
   skip: [String!]!
+}
+
+# Immutable configuration, independent of workspace contents.
+type ModuleFacts {
+  path: String!
+  prefix: String!
+  skipTest: Boolean!
 }
