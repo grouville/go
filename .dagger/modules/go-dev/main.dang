@@ -342,6 +342,54 @@ type GoDev {
   }
 
   """
+  Default test snapshots follow direct test files, including after edits. An
+  explicit source override remains independent of the discovered snapshot.
+  """
+  testSnapshotDirectoriesCheck: Void @check {
+    let source = directory
+      .withNewFile("go.mod", "module example.com/directories\n\ngo 1.26.1\n")
+      .withNewFile("main.go", goMain("root"))
+      .withNewFile("root_test.go", "package main\nimport \"testing\"\nfunc TestRoot(t *testing.T) {}\n")
+      .withNewFile("parent/main.go", goMain("parent"))
+      .withNewFile("parent/deep/deep_test.go", "package deep\nimport \"testing\"\nfunc TestDeep(t *testing.T) {}\n")
+      .withNewFile("missing/main.go", goMain("missing"))
+      .withNewFile("emptyfiles/main.go", goMain("emptyfiles"))
+      .withNewFile("emptyfiles/empty_test.go", "package main\n")
+      .withNewFile("odd [x]/item_test.go", "package odd\nimport \"testing\"\nfunc TestOdd(t *testing.T) {}\n")
+      .withNewFile("正常/item_test.go", "package normal\nimport \"testing\"\nfunc TestUnicode(t *testing.T) {}\n")
+      .withNewFile("nested/go.mod", "module example.com/nested\n\ngo 1.26.1\n")
+      .withNewFile("nested/item_test.go", "package nested\nimport \"testing\"\nfunc TestNested(t *testing.T) {}\n")
+    let tool = go(version: "1.26.1")
+    let packages = tool.packages(source.asWorkspace)
+    assert(packages.get(key: ".").tests.keys == ["TestRoot"], "root test snapshot changed")
+    run(
+      packages.get(key: ".").tests.get(key: "TestRoot").test(source.asWorkspace),
+    )
+    assert(packages.get(key: "parent").tests.keys.length == 0, "descendant tests leaked into their parent")
+    assert(packages.get(key: "parent/deep").tests.keys == ["TestDeep"], "deep test snapshot changed")
+    assert(packages.get(key: "missing").tests.keys.length == 0, "a package absent from the snapshot acquired tests")
+    assert(packages.get(key: "emptyfiles").tests.keys.length == 0, "an empty test file acquired a test")
+    assert(packages.get(key: "odd [x]").tests.keys == ["TestOdd"], "literal path characters changed")
+    assert(packages.get(key: "正常").tests.keys == ["TestUnicode"], "Unicode paths changed")
+    assert(packages.get(key: "nested").tests.keys == ["TestNested"], "nested module tests changed")
+    let added = source.withNewFile("missing/override_test.go", "package main\nimport \"testing\"\nfunc TestAdded(t *testing.T) {}\n")
+    assert(packages.get(key: "missing").tests(added).keys == ["TestAdded"], "explicit source did not override the old snapshot")
+    assert(
+      tool.packages(added.asWorkspace).get(key: "missing").tests.keys == ["TestAdded"],
+      "new test file was not discovered",
+    )
+    let removed = added.withoutFile("root_test.go").withoutFile("missing/override_test.go")
+    let after = tool.packages(removed.asWorkspace)
+    assert(after.get(key: ".").tests.keys.length == 0, "removed root tests stayed in the snapshot")
+    assert(after.get(key: "missing").tests.keys.length == 0, "removed package tests stayed in the snapshot")
+    assert(
+      tool.packages(source.asWorkspace.withWorkdir("parent")).get(key: "parent").tests.keys.length == 0,
+      "cwd changed the package snapshot",
+    )
+    null
+  }
+
+  """
   A retained package follows module boundaries in its execution workspace.
   """
   packageLayoutRebindCheck: Void @check {

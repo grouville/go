@@ -200,10 +200,22 @@ type Go {
       }
     let found = prepared.{{owner, paths(ws: ws)}}
     let owners = found.map { row => row.owner }
+    let testSource = ws.directory("/", include: ["**/go.mod", "**/*_test.go"])
+    # One snapshot walk replaces an existence query for every package. A
+    # package with only descendants' tests has no direct test files of its own.
+    let testDirectories = testSource
+      .glob("**/*_test.go")
+      .filter { file => file.hasSuffix("/") == false }
+      .map { file =>
+        let dir = file.trimPrefix("/").trimPrefix("./").split("/").dropLast(1).join("/")
+        if (dir == "") { "." } else { dir }
+      }
+      .uniq
     GoPackages(
       paths: sorted(found.reduce(empty) { all, mod => all + mod.paths }),
       moduleRoots: owners.map { mod => mod.path },
-      testSource: ws.directory("/", include: ["**/go.mod", "**/*_test.go"]),
+      testSource: testSource,
+      testDirectories: testDirectories,
       owners: owners,
       moduleLayoutDigest: lib.moduleLayoutDigest(ws),
       mountPath: workspaceMountPath(ws),
@@ -284,6 +296,7 @@ type GoPackages @collection {
 
   let moduleRoots: [String!]
   let testSource: Directory
+  let testDirectories: [String!]
   let owners: [GoModule!]
   let moduleLayoutDigest: String
 
@@ -313,7 +326,12 @@ type GoPackages @collection {
       knownModule: owner,
       testSource: if (testSource == null) { null } else {
         let source = testSource ?? directory
-        if (source.exists(path)) {
+        let hasFiles = if (testDirectories == null) {
+          source.exists(path)
+        } else {
+          (testDirectories ?? []).contains(path)
+        }
+        if (hasFiles) {
           source.directory(path).filter(include: ["*_test.go"])
         } else {
           directory
