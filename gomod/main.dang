@@ -634,7 +634,12 @@ type GoMod {
     nestedRoots(ws).reduce(empty) { roots, root => roots.with(root, true) }
   }
 
-  let ownsFile(file: String!, nested: Map[Boolean!]!): Boolean! {
+  # The batch index includes self and ancestors; public callers pass only nested roots.
+  let ownsFile(
+    file: String!,
+    nested: Map[Boolean!]!,
+    globalRoots: Boolean! = false,
+  ): Boolean! {
     if (goIgnores(relative(file))) {
       false
     } else if (nested.isEmpty) {
@@ -645,7 +650,7 @@ type GoMod {
         nested: false
       }}) { state, segment =>
         let dir = if (state.directory == "") { segment } else { state.directory + "/" + segment }
-        let boundary = dir != path and (path == "." or dir.hasPrefix(path + "/")) and nested.has(dir)
+        let boundary = nested.has(dir) and (globalRoots == false or (dir != path and (path == "." or dir.hasPrefix(path + "/"))))
         {{directory: dir, nested: state.nested or boundary}}
       }
       parent.nested == false
@@ -665,17 +670,22 @@ type GoMod {
     if (ws.file("/" + subpath("go.mod")).contents.match(`(?m)^[ \t]*module([ \t(]|$)`) == null) {
       empty
     } else {
-      filesWithBoundaries(ws, "*.go", boundaries)
+      filesWithBoundaries(ws, "*.go", boundaries, globalRoots: true)
     }
   }
 
-  let filesWithBoundaries(ws: Workspace!, glob: String!, nested: Map[Boolean!]!): [String!]! {
+  let filesWithBoundaries(
+    ws: Workspace!,
+    glob: String!,
+    nested: Map[Boolean!]!,
+    globalRoots: Boolean! = false,
+  ): [String!]! {
     sorted(
       ws
         .glob(subpath("**/" + glob))
         .filter { file => file.hasSuffix("/") == false }
         .map { file => file.trimPrefix("/").trimPrefix("./") }
-        .filter { file => ownsFile(file, nested) },
+        .filter { file => ownsFile(file, nested, globalRoots) },
     )
   }
 
