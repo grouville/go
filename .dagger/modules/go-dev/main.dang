@@ -223,7 +223,9 @@ type GoDev {
     let tool = go(version: "1.26.1")
     let packages = tool.packages(ws)
     assert(containsPath(packages.keys, modPath), "package discovery missed " + modPath)
-    let tests = packages.get(key: modPath).tests(ws)
+    let tests = packages.get(key: modPath).tests(
+      ws.directory("/", include: ["**/go.mod", "**/*_test.go"]),
+    )
     let missing = [
       "TestFixtureFromTestdata",
       "TestGoTestIncludeAnnotation",
@@ -249,7 +251,9 @@ type GoDev {
     let overlayFile = noPackagesFixturePath + "/overlay_test.go"
     let overlay = ws.withNewFile(overlayFile, "package nopackages\nimport \"testing\"\nfunc TestOverlay(t *testing.T) {}\n")
     assert(
-      tool.packages(overlay).get(key: noPackagesFixturePath).tests(overlay).keys == ["TestOverlay"],
+      tool.packages(overlay).get(key: noPackagesFixturePath).tests(
+        overlay.directory("/", include: ["**/go.mod", "**/*_test.go"]),
+      ).keys == ["TestOverlay"],
       "an overlay test was missing from discovery",
     )
     let removed = overlay.withNewFile(overlayFile, "package nopackages\n")
@@ -290,16 +294,24 @@ type GoDev {
       found.keys == [".", "examples", "nested", "sub"],
       "static package discovery found: " + found.keys.join(", "),
     )
-    let rootNames = found.get(key: ".").tests(rooted).keys
+    let rootNames = found.get(key: ".").tests(
+      rooted.directory("/", include: ["**/go.mod", "**/*_test.go"]),
+    ).keys
     assert(
       rootNames == ["TestAlpha", "FuzzAlpha", "ExampleAlpha", "TestConstrained", "TestÉÉ", "Test正常", "TestParameter"],
       "static test discovery found: " + rootNames.join(", "),
     )
-    let subNames = found.get(key: "sub").tests(rooted).keys
+    let subNames = found.get(key: "sub").tests(
+      rooted.directory("/", include: ["**/go.mod", "**/*_test.go"]),
+    ).keys
     assert(subNames == ["TestBeta", "TestAlpha"], "static test discovery in sub found: " + subNames.join(", "))
-    let exampleNames = found.get(key: "examples").tests(rooted).keys
+    let exampleNames = found.get(key: "examples").tests(
+      rooted.directory("/", include: ["**/go.mod", "**/*_test.go"]),
+    ).keys
     assert(exampleNames == ["Example"], "an examples-only package found: " + exampleNames.join(", "))
-    let nestedNames = found.get(key: "nested").tests(rooted).keys
+    let nestedNames = found.get(key: "nested").tests(
+      rooted.directory("/", include: ["**/go.mod", "**/*_test.go"]),
+    ).keys
     assert(nestedNames == ["TestNested"], "the nested module's package found: " + nestedNames.join(", "))
 
     # The same name in two packages runs only where it was selected, and a
@@ -311,11 +323,15 @@ type GoDev {
       .asWorkspace
     let sharedPackages = go(version: "1.26.1").packages(shared)
     run(
-      sharedPackages.get(key: ".").tests(shared).subset(keys: ["TestShared"]).batch.test(shared),
+      sharedPackages.get(key: ".").tests(
+        shared.directory("/", include: ["**/go.mod", "**/*_test.go"]),
+      ).subset(keys: ["TestShared"]).batch.test(shared),
     )
     let failed = {
       run(
-        sharedPackages.get(key: "sub").tests(shared).get(key: "TestShared").test(shared),
+        sharedPackages.get(key: "sub").tests(
+          shared.directory("/", include: ["**/go.mod", "**/*_test.go"]),
+        ).get(key: "TestShared").test(shared),
       )
       "no failure"
     } rescue {
@@ -335,7 +351,9 @@ type GoDev {
       .asWorkspace
     let pkg = go(version: "1.26.1").packages(before).get(key: "sub")
     let after = before.withNewFile("/sub/go.mod", "module example.com/layout/sub\n\ngo 1.26.1\n")
-    run(pkg.tests(after).get(key: "TestReboundLayout").test(after))
+    run(
+      pkg.tests(after.directory("/", include: ["**/go.mod", "**/*_test.go"])).get(key: "TestReboundLayout").test(after),
+    )
     null
   }
 

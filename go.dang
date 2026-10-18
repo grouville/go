@@ -411,7 +411,10 @@ type GoPackage {
   """
   Tests in this package, keyed by name.
   """
-  tests(ws: Workspace!): GoTests! {
+  tests(
+    source: Directory! @defaultPath("/") @ignorePatterns(["**", "!**/go.mod", "!**/*_test.go"]),
+  ): GoTests! {
+    let ws = source.asWorkspace
     let mod = module(ws)
     let dir = mod.relativeDir(path)
     GoTests(names: mod.testNames(ws, dir), directory: dir, module: mod)
