@@ -73,13 +73,21 @@ type Gomod {
   }
 
   """
-  A digest of the workspace's go.mod snapshot.
+  A digest of the workspace-root-relative go.mod paths.
 
-  A sparse native snapshot lets consumers retain discovered ownership while
-  detecting layout edits before reusing it with another workspace.
+  Ownership depends on module boundaries. File contents, metadata and unrelated
+  empty directories do not change which module owns a package.
   """
   moduleLayoutDigest(ws: Workspace!): String! {
-    ws.directory("/", include: ["**/go.mod"]).digest
+    let paths = ws
+      .withWorkdir(".")
+      .glob("**/go.mod")
+      .filter { path => path.hasSuffix("/") == false }
+      .map { path => path.trimPrefix("/").trimPrefix("./") }
+    directory
+      .withNewFile("go-module-layout", at(".").sorted(paths).join("\x00"))
+      .file("go-module-layout")
+      .digest(excludeMetadata: true)
   }
 
   """
