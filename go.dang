@@ -576,8 +576,8 @@ type GoModule {
     let includeDirs = matchingGenerateDirectories(ws, included)
     let excludeDirs = matchingGenerateDirectories(ws, excluded)
     dirs.filter { dir =>
-      (included.length == 0 or includeDirs.any { match => match == dir })
-        and excludeDirs.any { match => match == dir } == false
+      (included.length == 0 or includeDirs.contains(dir))
+        and excludeDirs.contains(dir) == false
     }
   }
 
