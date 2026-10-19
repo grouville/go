@@ -390,6 +390,48 @@ type GoDev {
   }
 
   """
+  Reconstructed package owners keep common settings and per-module test policy.
+  """
+  packageOwnerSettingsCheck: Void @check {
+    let testBody = ```go
+      package owner
+      import (
+        "os"
+        "testing"
+      )
+      func TestOwnerSettings(t *testing.T) {
+        if !configured || os.Getenv("DAGGER_GO_CUSTOM_BASE") != "yes" {
+          t.Fatal("package owner lost its configured flags or base image")
+        }
+      }
+    ``` + "\n"
+    let source = ["root", "nested"]
+      .reduce(directory) { files, name =>
+        let prefix = if (name == "root") { "" } else { name + "/" }
+        files
+          .withNewFile(prefix + "go.mod", "module example.com/" + name + "\n\ngo 1.26.1\n")
+          .withNewFile(prefix + "configured.go", "//go:build ownerconfig\n\npackage owner\nconst configured = true\n")
+          .withNewFile(prefix + "owner_test.go", testBody)
+      }
+      .withNewFile("nested/skipped/go.mod", "module example.com/skipped\n\ngo 1.26.1\n")
+      .withNewFile("nested/skipped/main.go", goMain("skipped"))
+      .withNewFile("nested/skipped/skip_test.go", "package main\nimport \"testing\"\nfunc TestSkipped(t *testing.T) { t.Fatal(\"should not run\") }\n")
+      .asWorkspace
+    let tool = go(base: base, goflags: "-tags=ownerconfig", test: ["**", "!nested/skipped"])
+    let found = tool.packages(source)
+    run(found.get(key: ".").tests.get(key: "TestOwnerSettings").test(source))
+    run(
+      found.get(key: "nested").tests.get(key: "TestOwnerSettings").test(source),
+    )
+    assert(found.get(key: "nested/skipped").tests.keys.length == 0, "reconstructed owner lost its test exclusion")
+    let below = source.withWorkdir("nested")
+    run(
+      tool.packages(below).get(key: "nested").tests.get(key: "TestOwnerSettings").test(below),
+    )
+    null
+  }
+
+  """
   A retained package follows module boundaries in its execution workspace.
   """
   packageLayoutRebindCheck: Void @check {

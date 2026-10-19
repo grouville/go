@@ -199,7 +199,6 @@ type Go {
         )
       }
     let found = prepared.{{owner, paths(ws: ws)}}
-    let owners = found.map { row => row.owner }
     let testSource = ws.directory("/", include: ["**/go.mod", "**/*_test.go"])
     # One snapshot walk replaces an existence query for every package. A
     # package with only descendants' tests has no direct test files of its own.
@@ -211,14 +210,52 @@ type Go {
         if (dir == "") { "." } else { dir }
       }
       .uniq
+    let layout = lib.moduleLayoutDigest(ws)
+    let noEntries: [GoPackageEntry!]! = []
+    let entries = found.reduce(noEntries) { all, group =>
+      all + group.paths.map { path =>
+        GoPackageEntry(
+          key: path,
+          value: packageAt(
+            path,
+            group.owner,
+            mount,
+            testSource,
+            testDirectories,
+            layout,
+          ),
+        )
+      }
+    }
     GoPackages(
       paths: sorted(found.reduce(empty) { all, mod => all + mod.paths }),
-      moduleRoots: owners.map { mod => mod.path },
-      testSource: testSource,
-      testDirectories: testDirectories,
-      owners: owners,
-      moduleLayoutDigest: lib.moduleLayoutDigest(ws),
+      entries: entries,
       mountPath: workspaceMountPath(ws),
+      tool: self,
+    )
+  }
+
+  # Construct items while their owner is already known; the engine resolves
+  # selected keys from the stored entries without calling back into this module.
+  let packageAt(
+    path: String!,
+    owner: GoModule!,
+    mount: String!,
+    source: Directory!,
+    testDirectories: [String!]!,
+    layout: String!,
+  ): GoPackage! {
+    GoPackage(
+      path: path,
+      moduleRoot: owner.path,
+      knownModule: owner,
+      testSource: if (testDirectories.contains(path)) {
+        source.directory(path).filter(include: ["*_test.go"])
+      } else {
+        directory
+      },
+      moduleLayoutDigest: layout,
+      mountPath: mount,
       tool: self,
     )
   }
@@ -294,54 +331,10 @@ type GoPackages @collection {
 
   let tool: Go!
 
-  let moduleRoots: [String!]
-  let testSource: Directory
-  let testDirectories: [String!]
-  let owners: [GoModule!]
-  let moduleLayoutDigest: String
-
-  # Use the deepest discovered root on a path boundary. Retaining these few
-  # roots avoids a workspace round trip and nested SDK call for every package.
-  let moduleRoot(path: String!): String {
-    let root = (moduleRoots ?? []).reduce("") { owner, root =>
-      if ((root == "." or path == root or path.hasPrefix(root + "/"))
-        and (owner == "" or owner == "." or root.hasPrefix(owner + "/"))) {
-        root
-      } else {
-        owner
-      }
-    }
-    if (root == "") { null } else { root }
-  }
-
   """
-  The package in this directory.
+  Stored package items, each bound to its workspace-relative key.
   """
-  package(path: String!): GoPackage! @get {
-    let root = moduleRoot(path)
-    let owner = (owners ?? []).find { mod => mod.path == (root ?? "") }
-    GoPackage(
-      path: path,
-      moduleRoot: root,
-      knownModule: owner,
-      testSource: if (testSource == null) { null } else {
-        let source = testSource ?? directory
-        let hasFiles = if (testDirectories == null) {
-          source.exists(path)
-        } else {
-          (testDirectories ?? []).contains(path)
-        }
-        if (hasFiles) {
-          source.directory(path).filter(include: ["*_test.go"])
-        } else {
-          directory
-        }
-      },
-      moduleLayoutDigest: moduleLayoutDigest,
-      mountPath: mountPath,
-      tool: tool,
-    )
-  }
+  entries: [GoPackageEntry!]! @get
 
   # The modules holding the selected packages, each once.
   let modules(ws: Workspace!): [GoModule!]! {
@@ -1288,4 +1281,10 @@ type GoPackageDiscovery {
   let paths(ws: Workspace!): [String!]! {
     owner.packagePaths(ws, files)
   }
+}
+
+# The key is stored with its value so subsets cannot change their association.
+type GoPackageEntry {
+  key: String!
+  value: GoPackage!
 }
