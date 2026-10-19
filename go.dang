@@ -213,7 +213,6 @@ type Go {
       .uniq
     GoPackages(
       paths: sorted(found.reduce(empty) { all, mod => all + mod.paths }),
-      moduleRoots: owners.map { mod => mod.path },
       testSource: testSource,
       testDirectories: testDirectories,
       owners: owners,
@@ -221,6 +220,24 @@ type Go {
       mountPath: workspaceMountPath(ws),
       tool: self,
     )
+  }
+
+  # Balanced merges avoid repeatedly copying a growing immutable map.
+  let moduleIndex(modules: [GoModule!]!): Map[{{prefix: String!, skipTest: Boolean!}}!]! {
+    let empty: Map[{{prefix: String!, skipTest: Boolean!}}!]! = [:]
+    if (modules.length < 2) {
+      modules.reduce(empty) { owners, mod =>
+        owners.with(mod.path, {{
+          prefix: mod.knownPrefix ?? "",
+          skipTest: mod.skipTest
+        }})
+      }
+    } else {
+      let middle = modules.length / 2
+      moduleIndex(modules.takeFirst(middle)).merge(moduleIndex(
+        modules.dropFirst(middle),
+      ))
+    }
   }
 
   # The module holding a package. A package holds no module of its own, so
@@ -294,24 +311,42 @@ type GoPackages @collection {
 
   let tool: Go!
 
-  let moduleRoots: [String!]
   let testSource: Directory
   let testDirectories: [String!]
-  let owners: [GoModule!]
+  let moduleOwners: Map[{{prefix: String!, skipTest: Boolean!}}!]
   let moduleLayoutDigest: String
 
-  # Use the deepest discovered root on a path boundary. Retaining these few
-  # roots avoids a workspace round trip and nested SDK call for every package.
+  new(
+    paths: [String!]!,
+    mountPath: String!,
+    tool: Go!,
+    testSource: Directory = null,
+    testDirectories: [String!] = null,
+    owners: [GoModule!] = null,
+    moduleLayoutDigest: String = null,
+  ) {
+    self.paths = paths
+    self.mountPath = mountPath
+    self.tool = tool
+    self.testSource = testSource
+    self.testDirectories = testDirectories
+    self.moduleOwners = tool.moduleIndex(owners ?? [])
+    self.moduleLayoutDigest = moduleLayoutDigest
+    self
+  }
+
+  # Walk path ancestors to find the deepest module without scanning every
+  # discovered module for each package.
   let moduleRoot(path: String!): String {
-    let root = (moduleRoots ?? []).reduce("") { owner, root =>
-      if ((root == "." or path == root or path.hasPrefix(root + "/"))
-        and (owner == "" or owner == "." or root.hasPrefix(owner + "/"))) {
-        root
-      } else {
-        owner
-      }
+    let owners: Map[{{prefix: String!, skipTest: Boolean!}}!]! = moduleOwners ?? [:]
+    if (owners.has(path)) {
+      path
+    } else if (path == ".") {
+      null
+    } else {
+      let parent = path.split("/").dropLast(1).join("/")
+      moduleRoot(if (parent == "") { "." } else { parent })
     }
-    if (root == "") { null } else { root }
   }
 
   """
@@ -319,11 +354,14 @@ type GoPackages @collection {
   """
   package(path: String!): GoPackage! @get {
     let root = moduleRoot(path)
-    let owner = (owners ?? []).find { mod => mod.path == (root ?? "") }
+    let owners: Map[{{prefix: String!, skipTest: Boolean!}}!]! = moduleOwners ?? [:]
+    let owner = owners[root ?? ""]
     GoPackage(
       path: path,
       moduleRoot: root,
-      knownModule: owner,
+      knownModule: if (owner == null) { null } else {
+        tool.goModuleAt(root ?? path, mountPath, owner.prefix, owner.skipTest)
+      },
       testSource: if (testSource == null) { null } else {
         let source = testSource ?? directory
         let hasFiles = if (testDirectories == null) {

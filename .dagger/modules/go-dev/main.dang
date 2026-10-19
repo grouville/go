@@ -390,6 +390,100 @@ type GoDev {
   }
 
   """
+  Package ownership preserves nested module selection and path boundaries.
+  """
+  packageOwnerIndexCheck: Void @check {
+    let test = "package owner\nimport \"testing\"\nfunc TestOwner(t *testing.T) {}\n"
+    let source = directory
+      .withNewFile("go.mod", "module example.com/root\n\ngo 1.26.1\n")
+      .withNewFile("item_test.go", test)
+      .withNewFile("owner.go", "package owner\n//go:generate echo owner\n")
+      .withNewFile("a/go.mod", "module example.com/a\n\ngo 1.26.1\n")
+      .withNewFile("a/sub/item_test.go", test)
+      .withNewFile("a/sub/owner.go", "package owner\n//go:generate echo owner\n")
+      .withNewFile("a/deep/go.mod", "module example.com/deep\n\ngo 1.26.1\n")
+      .withNewFile("a/deep/sub/item_test.go", test)
+      .withNewFile("a/deep/sub/owner.go", "package owner\n//go:generate echo owner\n")
+      .withNewFile("ab/item_test.go", test)
+      .withNewFile("ab/owner.go", "package owner\n//go:generate echo owner\n")
+      .withNewFile("space name/go.mod", "module example.com/space\n\ngo 1.26.1\n")
+      .withNewFile("space name/sub/item_test.go", test)
+      .withNewFile("space name/sub/owner.go", "package owner\n//go:generate echo owner\n")
+      .withNewFile("正常/go.mod", "module example.com/unicode\n\ngo 1.26.1\n")
+      .withNewFile("正常/sub/item_test.go", test)
+      .withNewFile("正常/sub/owner.go", "package owner\n//go:generate echo owner\n")
+    let ws = source.asWorkspace
+    let packages = go(version: "1.26.1", test: ["**", "!a/deep", "!正常"]).packages(ws)
+    [".", "a/sub", "ab", "space name/sub"].map { path =>
+      assert(packages.get(key: path).tests.keys == ["TestOwner"], "wrong owner for " + path)
+    }
+    ["a/deep/sub", "正常/sub"].map { path =>
+      assert(packages.get(key: path).tests.keys.length == 0, "module exclusion lost for " + path)
+    }
+    let selected = go(version: "1.26.1", test: ["a"]).packages(ws)
+    assert(selected.get(key: "ab").tests.keys.length == 0, "module selection crossed a path boundary")
+    run(selected.get(key: "a/sub").tests.get(key: "TestOwner").test(ws))
+    run(selected.get(key: "a/deep/sub").tests.get(key: "TestOwner").test(ws))
+    null
+  }
+
+  """
+  Reconstructed owners retain the tool's test, build and generate settings.
+  """
+  packageOwnerSettingsCheck: Void @check {
+    let source = directory
+      .withNewFile("go.mod", "module example.com/owner-settings\n\ngo 1.26.1\n")
+      .withNewFile("owner-config", "setting retained\n")
+      .withNewFile("pkg/main.go", ```go
+        //go:build selected
+
+        package main
+        import "fmt"
+        var message = "default"
+        func main() { fmt.Println(message) }
+        //go:generate sh -c "test $DAGGER_OWNER_SETTING = kept && test $GOFLAGS = -tags=selected && test $PWD = /custom/owner/pkg && cat ../owner-config > generated.txt"
+      ``` + "\n")
+      .withNewFile("pkg/main_test.go", ```go
+        //go:build selected
+
+        package main
+        import (
+          "os"
+          "testing"
+        )
+        func TestOwnerSettings(t *testing.T) {
+          if os.Getenv("DAGGER_OWNER_SETTING") != "kept" { t.Fatal("custom base lost") }
+          cwd, err := os.Getwd()
+          if err != nil || cwd != "/custom/owner/pkg" { t.Fatalf("mount path: %q, %v", cwd, err) }
+          data, err := os.ReadFile("../owner-config")
+          if err != nil || string(data) != "setting retained\n" { t.Fatalf("extra file: %q, %v", data, err) }
+        }
+      ``` + "\n")
+    let ws = source.asWorkspace
+    let custom = container.from("golang:1.26.1-alpine").withEnvVariable(
+      "DAGGER_OWNER_SETTING",
+      "kept",
+    )
+    let tool = go(
+      base: custom,
+      goflags: "-tags=selected",
+      buildFlags: ["-ldflags=-X main.message=kept"],
+      includeExtraFiles: ["owner-config"],
+      mountPath: "/custom/owner",
+    )
+    let pkg = tool.packages(ws).get(key: "pkg")
+    run(pkg.tests.get(key: "TestOwnerSettings").test(ws))
+    let said = custom.withFile("/app", pkg.binary(ws)).withExec(["/app"]).stdout
+    assert(said == "kept\n", "build flags lost: " + said)
+    let changes = pkg.generate(ws)
+    assert(
+      changes.layer.file("pkg/generated.txt").contents == "setting retained\n",
+      "generation settings lost",
+    )
+    null
+  }
+
+  """
   A retained package follows module boundaries in its execution workspace.
   """
   packageLayoutRebindCheck: Void @check {
