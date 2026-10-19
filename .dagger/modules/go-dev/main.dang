@@ -1288,4 +1288,32 @@ type GoDev {
     }
     null
   }
+
+  """
+  Shared generation discovery preserves selection and workspace versions.
+  """
+  generationDiscoveryCheck: Void @check {
+    let source = directory
+      .withNewFile("go.mod", "module example.com/root\n\ngo 1.26.6\n")
+      .withNewFile("root.go", "package root\n//go:generate true\n")
+      .withNewFile("nested/go.mod", "module example.com/nested\n\ngo 1.26.6\n")
+      .withNewFile("nested/value.go", "package nested\n//go:generate true\n")
+      .withNewFile("other/value.go", "package other\n//go:generate true\n")
+    let ws = source.asWorkspace
+    let selected = go(version: "1.26.6", test: ["!**"], generate: ["nested"])
+    assert(selected.packages(ws).keys == ["nested"], "discovery included unselected generation directories")
+    assert(selected.module(ws, ".").generateDirectories(ws) == [], "root generation selection changed")
+    assert(
+      selected.module(ws, "nested").generateDirectories(ws) == ["nested"],
+      "nested generation selection changed",
+    )
+    let removed = source.withoutFile("nested/value.go").asWorkspace
+    assert(selected.packages(removed).keys == [], "removed generation package reused old matches")
+    let other = go(version: "1.26.6", test: ["!**"], generate: ["other"])
+    assert(other.packages(removed).keys == ["other"], "new selection reused another tool's matches")
+    assert(selected.packages(ws).keys == ["nested"], "old workspace changed after another discovery")
+    let excluded = go(version: "1.26.6", test: ["!**"], generate: ["**", "!nested"])
+    assert(excluded.packages(ws).keys == [".", "other"], "generation exclusion changed after grouping")
+    null
+  }
 }

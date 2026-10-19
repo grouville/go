@@ -182,9 +182,14 @@ type Go {
   """
   packages(ws: Workspace!): GoPackages! {
     let empty: [String!]! = []
+    let owners = modules(ws)
+    let matches = if (owners.length == 0) { null } else { GoGenerateMatches(
+      ws,
+      generate,
+    ) }
     GoPackages(
       paths: sorted(
-        modules(ws).reduce(empty) { all, mod => all + mod.packagePaths(ws) },
+        owners.reduce(empty) { all, mod => all + mod.packagePaths(ws, matches) },
       ),
       mountPath: workspaceMountPath(ws),
       tool: self,
@@ -571,29 +576,7 @@ type GoModule {
 
   # The workspace directories among dirs that the generate setting selects.
   let selectGenerate(ws: Workspace!, dirs: [String!]!): [String!]! {
-    let included = generatePatterns.filter { p => p.hasPrefix("!") == false }
-    let excluded = generatePatterns.filter { p => p.hasPrefix("!") }.map { p => p.trimPrefix("!") }
-    let includeDirs = matchingGenerateDirectories(ws, included)
-    let excludeDirs = matchingGenerateDirectories(ws, excluded)
-    dirs.filter { dir =>
-      (included.length == 0 or includeDirs.any { match => match == dir })
-        and excludeDirs.any { match => match == dir } == false
-    }
-  }
-
-  # Match direct Go files to include the workspace root and avoid treating a
-  # literal directory as recursive. Glob syntax is entirely Dagger's.
-  let matchingGenerateDirectories(ws: Workspace!, patterns: [String!]!): [String!]! {
-    let empty: [String!]! = []
-    patterns.reduce(empty) { dirs, pattern =>
-      dirs + ws
-        .glob(pattern.trimSuffix("/") + "/*.go")
-        .filter { file => file.hasSuffix("/") == false }
-        .map { file =>
-          let dir = file.split("/").dropLast(1).join("/")
-          if (dir == "") { "." } else { dir }
-        }
-    }
+    GoGenerateMatches(ws, generatePatterns).select(dirs)
   }
 
   let discoveredGenerateDirectories(ws: Workspace!): [String!]! {
@@ -687,7 +670,7 @@ type GoModule {
   # Workspace paths of this module's packages that have something to do: tests
   # to run, a main package to build, or go:generate commands to run. Each is
   # found by searching the source, so listing packages runs no container.
-  let packagePaths(ws: Workspace!): [String!]! {
+  let packagePaths(ws: Workspace!, matches: GoGenerateMatches = null): [String!]! {
     # The module's files are listed once and shared: listing them is the
     # costly part, and every kind of package is found among them.
     let files = lib.at(path).ownFiles(ws, "*.go")
@@ -698,21 +681,29 @@ type GoModule {
       let withTests = testMatches(ws).map { match => match.filePath.trimPrefix("/").trimPrefix("./") }
       files.filter { f => f.hasSuffix("_test.go") and withTests.contains(f) }.map { f => packageDirectory(f) }
     }
-    let dirs = testDirs + binaryPackagesIn(ws, files) + generatePackagesIn(ws, files)
+    let dirs = testDirs + binaryPackagesIn(ws, files) + generatePackagesIn(
+      ws,
+      files,
+      matches,
+    )
     dirs.uniq.map { dir => packagePath(dir) }
   }
 
   # Module-relative directories holding a go:generate command and selected by
   # the generate setting. A go:generate:include or :container annotation alone
   # is not a command.
-  let generatePackagesIn(ws: Workspace!, files: [String!]!): [String!]! {
+  let generatePackagesIn(
+    ws: Workspace!,
+    files: [String!]!,
+    matches: GoGenerateMatches,
+  ): [String!]! {
     let empty: [String!]! = []
     if (files.length == 0) {
       empty
     } else {
       let found = markedFiles(ws, "generate")
       let dirs = files.filter { f => found.contains(f) }.map { f => packagePath(packageDirectory(f)) }.uniq
-      selectGenerate(ws, dirs).map { dir => relativeDir(dir) }
+      (matches ?? GoGenerateMatches(ws, generatePatterns)).select(dirs).map { dir => relativeDir(dir) }
     }
   }
 
@@ -1173,4 +1164,40 @@ type GoTest {
 type GoGeneration {
   let container: Container!
   let value: String!
+}
+
+# Immutable matches for one discovery; never stored in collection getters.
+type GoGenerateMatches {
+  let includeAll: Boolean!
+  let included: [String!]!
+  let excluded: [String!]!
+
+  new(ws: Workspace!, patterns: [String!]!) {
+    let include = patterns.filter { p => p.hasPrefix("!") == false }
+    let exclude = patterns.filter { p => p.hasPrefix("!") }.map { p => p.trimPrefix("!") }
+    self.includeAll = include.length == 0
+    self.included = matchingGenerateDirectories(ws, include)
+    self.excluded = matchingGenerateDirectories(ws, exclude)
+    self
+  }
+
+  let select(dirs: [String!]!): [String!]! {
+    dirs.filter { dir =>
+      (includeAll or included.any { match => match == dir })
+        and excluded.any { match => match == dir } == false
+    }
+  }
+
+  let matchingGenerateDirectories(ws: Workspace!, patterns: [String!]!): [String!]! {
+    let empty: [String!]! = []
+    patterns.reduce(empty) { dirs, pattern =>
+      dirs + ws
+        .glob(pattern.trimSuffix("/") + "/*.go")
+        .filter { file => file.hasSuffix("/") == false }
+        .map { file =>
+          let dir = file.split("/").dropLast(1).join("/")
+          if (dir == "") { "." } else { dir }
+        }
+    }
+  }
 }
