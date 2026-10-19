@@ -947,11 +947,13 @@ type GoModule {
     } else {
       let mains = markedFiles(ws, "main")
       let ignored = markedFiles(ws, "ignore")
-      files
+      let packages = files
         .filter { f => mains.contains(f) and ignored.contains(f) == false }
         .map { f => packageDirectory(f) }
         .uniq
-        .filter { pkg => lib.at(pkg).selected(buildPatterns) }
+      if (packages.length == 0) { empty } else {
+        lib.selectedPaths(packages, buildPatterns)
+      }
     }
   }
 

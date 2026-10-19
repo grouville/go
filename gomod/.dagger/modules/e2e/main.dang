@@ -159,6 +159,25 @@ type E2e {
   }
 
   """
+  Selecting several paths preserves the single-path rules and input order.
+  """
+  batchedSelectionCheck: Void @check {
+    let paths = ["docs/keep", "core", "/docs/", "docs-tools", "docs/keep", "."]
+    assert(gomod.selectedPaths([], ["**"]) == [], "empty input gained paths")
+    assert(gomod.selectedPaths(paths, []) == paths, "select-all changed paths or order")
+    assert(
+      gomod.selectedPaths(paths, ["/docs/**/"]) == ["docs/keep", "/docs/", "docs/keep"],
+      "selection changed normalization, duplicates or path boundaries",
+    )
+    assert(
+      gomod.selectedPaths(paths, ["**", "!docs", "docs/keep"]) == ["core", "docs-tools", "."],
+      "an include overrode an exclusion",
+    )
+    assert(gomod.selectedPaths(paths, ["."]) == ["."], "root selection included another path")
+    null
+  }
+
+  """
   One selection syntax for every tool. These are the cases each tool used to
   assert separately.
   """

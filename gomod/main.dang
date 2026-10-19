@@ -60,6 +60,14 @@ type Gomod {
   }
 
   """
+  Paths selected by the same rules as GoMod.selected, in input order.
+  Return each path as given, including duplicates.
+  """
+  selectedPaths(paths: [String!]!, patterns: [String!]!): [String!]! {
+    paths.filter { path => at(path).selected(patterns) }
+  }
+
+  """
   The Go module containing a workspace path.
 
   With findUp the path may be any directory inside a module; without it the
