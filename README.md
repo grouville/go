@@ -137,6 +137,17 @@ and nested modules are left out. Build constraints are not evaluated: a test
 excluded by one is still listed, and selecting it runs nothing. A module
 outside the `test` selection offers no tests.
 
+`packages(ws)` captures the test source files used for discovery. A package's
+`tests` uses that snapshot, so editing other packages does not change its test
+collection. Test execution still receives the workspace to run against.
+
+When calling the module directly, use `pkg.tests` for the captured sources.
+To discover tests from edited sources, use
+`pkg.tests(source: edited.directory("/"))`. This replaces the previous
+`pkg.tests(edited)` call, which took a workspace. The source directory is
+relative to the workspace root; an override also resolves module ownership
+again if a `go.mod` file was added or removed.
+
 `test` on a module is a plain function rather than a check, so that `dagger
 check` does not run the same tests twice.
 

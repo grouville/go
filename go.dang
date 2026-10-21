@@ -182,17 +182,42 @@ type Go {
   """
   packages(ws: Workspace!): GoPackages! {
     let empty: [String!]! = []
+    let found = modules(ws)
+    let tests = ws.directory("/", include: ["**/*_test.go"])
+    let testDirs = tests
+      .glob("**/*_test.go")
+      .filter { file => file.hasSuffix("/") == false }
+      .map { file =>
+        let parent = file.trimPrefix("/").trimPrefix("./").split("/").dropLast(1).join("/")
+        if (parent == "") { "." } else { parent }
+      }
+      .uniq
     GoPackages(
       paths: sorted(
-        modules(ws).reduce(empty) { all, mod => all + mod.packagePaths(ws) },
+        found.reduce(empty) { all, mod => all + mod.packagePaths(ws) },
       ),
+      moduleRoots: found.map { mod => mod.path },
+      testSource: tests,
+      testDirectories: testDirs,
       mountPath: workspaceMountPath(ws),
       tool: self,
     )
   }
 
-  # The module holding a package. A package holds no module of its own, so
-  # that the collection needs no workspace.
+  # Merge balanced halves so building an immutable map does not repeatedly
+  # copy every earlier entry.
+  let pathIndex(paths: [String!]!): Map[Boolean!]! {
+    let empty: Map[Boolean!]! = [:]
+    if (paths.length < 2) {
+      paths.reduce(empty) { dirs, path => dirs.with(path, true) }
+    } else {
+      let middle = paths.length / 2
+      pathIndex(paths.takeFirst(middle)).merge(pathIndex(paths.dropFirst(middle)))
+    }
+  }
+
+  # Resolve against the supplied workspace for execution, which may differ
+  # from the source snapshot used to discover this package.
   let packageModule(ws: Workspace!, pkgPath: String!, mount: String!): GoModule! {
     goModuleAt(lib.module(ws, pkgPath).path, mount)
   }
@@ -246,16 +271,58 @@ type GoPackages @collection {
   """
   paths: [String!]! @keys
 
-  # Held instead of the workspace, which would stop the collection caching.
   let mountPath: String!
-
   let tool: Go!
+
+  # Immutable discovery inputs; each getter passes only its package's slice.
+  let moduleRoots: Map[Boolean!]!
+  let testSource: Directory!
+  let testDirectories: Map[Boolean!]!
+
+  new(
+    paths: [String!]!,
+    mountPath: String!,
+    tool: Go!,
+    moduleRoots: [String!]!,
+    testSource: Directory!,
+    testDirectories: [String!]!,
+  ) {
+    self.paths = paths
+    self.mountPath = mountPath
+    self.tool = tool
+    self.moduleRoots = tool.pathIndex(moduleRoots)
+    self.testSource = testSource
+    self.testDirectories = tool.pathIndex(testDirectories)
+    self
+  }
+
+  let moduleRoot(path: String!): String! {
+    if (moduleRoots.has(path)) {
+      path
+    } else if (path == ".") {
+      raise "no module found for package"
+    } else {
+      let parent = path.split("/").dropLast(1).join("/")
+      moduleRoot(if (parent == "") { "." } else { parent })
+    }
+  }
 
   """
   The package in this directory.
   """
   package(path: String!): GoPackage! @get {
-    GoPackage(path: path, mountPath: mountPath, tool: tool)
+    let root = moduleRoot(path)
+    GoPackage(
+      path: path,
+      mountPath: mountPath,
+      tool: tool,
+      discoveryModule: tool.goModuleAt(root, mountPath),
+      testSource: if (testDirectories.has(path)) {
+        testSource.directory(path).filter(include: ["*_test.go"])
+      } else {
+        directory
+      },
+    )
   }
 
   # The modules holding the selected packages, each once.
@@ -343,17 +410,34 @@ type GoPackage {
 
   let tool: Go!
 
+  let discoveryModule: GoModule!
+  let testSource: Directory!
+
   let module(ws: Workspace!): GoModule! {
     tool.packageModule(ws, path, mountPath)
   }
 
   """
-  Tests in this package, keyed by name.
+  Tests in the source snapshot captured by packages, keyed by name.
+
+  To discover tests from edited sources, pass a workspace-root directory as
+  source. Test execution still uses the workspace supplied to test.
   """
-  tests(ws: Workspace!): GoTests! {
-    let mod = module(ws)
-    let dir = mod.relativeDir(path)
-    GoTests(names: mod.testNames(ws, dir), directory: dir, module: mod)
+  tests(source: Directory = null): GoTests! {
+    let mod = if (source == null) {
+      discoveryModule
+    } else {
+      module((source ?? directory).asWorkspace)
+    }
+    let files = if (source == null) {
+      testSource
+    } else {
+      let root = source ?? directory
+      if (root.exists(path)) {
+        root.directory(path).filter(include: ["*_test.go"])
+      } else { directory }
+    }
+    GoTests(names: mod.testNames(files), directory: mod.relativeDir(path), module: mod)
   }
 
   """
@@ -734,38 +818,22 @@ type GoModule {
   # excluded by one is still listed, and selecting it runs nothing. Files are
   # taken in byte order, so the keys, and the -run pattern built from them, are
   # stable.
-  let testNames(ws: Workspace!, dir: String!): [String!]! {
+  let testNames(source: Directory!): [String!]! {
     let empty: [String!]! = []
-    # Only the package's own directory is listed: a package is never a nested
-    # module's root or under testdata, so its files are all this module's.
-    let pkgPath = packagePath(dir)
-    let files = if (skipTest) {
+    if (skipTest) {
       empty
     } else {
-      sorted(
-        ws
-          .glob(if (pkgPath == ".") { "*_test.go" } else { pkgPath + "/*_test.go" })
-          .filter { file => file.hasSuffix("/") == false }
-          .map { file => file.trimPrefix("/").trimPrefix("./") },
+      let files = sorted(
+        source.glob("*_test.go").filter { file => file.hasSuffix("/") == false },
       )
-    }
-    if (files.length == 0) {
-      empty
-    } else {
-      # One search over the module tree, matched back to the package's files
-      # below. The search is the same for every package, so it runs once.
-      # Searching a subdirectory or the files by name would be narrower, but
-      # fails on a workspace built with withDirectory.
-      let matches = testMatches(ws)
-      files
-        .reduce(empty) { names, file =>
-          names + matches
-            .filter { match => match.filePath.trimPrefix("/").trimPrefix("./") == file }
-            .map { match =>
-              match.matchedLines.trimPrefix("func ").split("(").takeFirst(1).join("")
-            }
-        }
-        .uniq
+      # Searching the directory preserves literal filenames and does not
+      # follow symlinks, unlike opening each file before searching it.
+      let matches = source.search(globs: ["/*_test.go"], pattern: testPattern).{{filePath, matchedLines}}
+      files.reduce(empty) { names, file =>
+        names + matches
+          .filter { match => match.filePath.trimPrefix("/").trimPrefix("./") == file }
+          .map { match => match.matchedLines.trimPrefix("func ").split("(").takeFirst(1).join("") }
+      }.uniq
     }
   }
 
@@ -774,9 +842,11 @@ type GoModule {
     ws.search(
       paths: [if (path == ".") { "/" } else { "/" + path }],
       globs: ["*_test.go"],
-      pattern: `^func (Test([^a-z(]\w*)?\(\s*\w+\s+\*testing\.T\s*\)|Fuzz([^a-z(]\w*)?\(\s*\w+\s+\*testing\.F\s*\)|Example([^a-z(]\w*)?\(\s*\))`,
+      pattern: testPattern,
     ).{{filePath, matchedLines}}
   }
+
+  let testPattern: Regexp! = `^func (Test([^a-z(]\w*)?\(\s*\w+\s+\*testing\.T\s*\)|Fuzz([^a-z(]\w*)?\(\s*\w+\s+\*testing\.F\s*\)|Example([^a-z(]\w*)?\(\s*\))`
 
   # Byte-order sort, as Go's sort.Strings.
   let sorted(items: [String!]!): [String!]! {
