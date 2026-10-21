@@ -2,6 +2,82 @@
 Development checks for dagger.io/go.
 """
 type GoDev {
+  """
+  Test filenames are literal paths, including characters used by glob patterns.
+  """
+  packageSearchFilenamesCheck: Void @check {
+    let files = directory
+      .withNewFile("go.mod", "module example.com/test-filenames\n\ngo 1.26.1\n")
+      .withNewFile("bracket[1]_test.go", "package fixture\nimport \"testing\"\nfunc TestBracket(t *testing.T) {}\n")
+      .withNewFile("normal_test.go", "package fixture\nimport \"testing\"\nfunc TestNormal(t *testing.T) {}\n")
+      .withNewFile("link-target.txt", "package fixture\nimport \"testing\"\nfunc TestLinked(t *testing.T) {}\n")
+      .withSymlink(target: "link-target.txt", linkName: "linked_test.go")
+    let caller = files.asWorkspace
+    let tool = go(version: "1.26.1")
+    let names = tool.packages(caller).get(key: ".").tests.keys
+    assert(names == ["TestBracket", "TestNormal"], "literal filename tests: " + names.join(", "))
+    let mounted = directory
+      .asWorkspace
+      .withDirectory("mounted/package", files)
+      .withWorkdir("mounted/package")
+    let mountedNames = tool.packages(mounted).get(key: "mounted/package").tests.keys
+    assert(mountedNames == names, "mounted test names: " + mountedNames.join(", "))
+    null
+  }
+
+  """
+  Test collection listing sees added host-workspace files in filename order.
+  """
+  packageSearchOverlayCheck(ws: Workspace!): Void @check {
+    let root = "testdata/go-module-with-testdata"
+    let tool = go(version: "1.26.1")
+    let base = ws.withWorkdir(root)
+    let before = tool.packages(base).get(key: root).tests.keys
+    let caller = base
+      .withNewFile("/" + root + "/z_added_a_test.go", "package fixture\nimport \"testing\"\nfunc TestOverlayAlpha(t *testing.T) {}\n")
+      .withNewFile("/" + root + "/z_added_z_test.go", "package fixture\nimport \"testing\"\nfunc Test正常(t *testing.T) {}\n")
+    let names = tool.packages(caller).get(key: root).tests.keys
+    assert(names == before + ["TestOverlayAlpha", "Test正常"], "overlay test names: " + names.join(", "))
+    let original = tool.packages(base).get(key: root)
+    assert(original.tests.keys == before, "discovery changed its source snapshot")
+    assert(
+      original.tests(source: caller.directory("/")).keys == names,
+      "explicit edited sources were ignored",
+    )
+    let addedPackage = caller.withNewFile(
+      "/" + root + "/added-package/added_test.go",
+      "package added\nimport \"testing\"\nfunc TestAddedPackage(t *testing.T) {}\n",
+    )
+    assert(
+      tool.packages(addedPackage).get(key: root + "/added-package").tests.keys == ["TestAddedPackage"],
+      "a package created through Dagger lost its tests",
+    )
+    null
+  }
+
+  """
+  Explicit source snapshots resolve nested modules again without changing the
+  package's original discovery snapshot.
+  """
+  snapshotModuleOwnershipCheck: Void @check {
+    let original = directory
+      .withNewFile("go.mod", "module example.com/root\n\ngo 1.26.1\n")
+      .withNewFile("sub/value_test.go", "package sub\nimport \"testing\"\nfunc TestValue(t *testing.T) {}\n")
+    let nested = original.withNewFile("sub/go.mod", "module example.com/sub\n\ngo 1.26.1\n")
+    let fromRoot = go(version: "1.26.1", test: ["!sub"])
+      .packages(original.asWorkspace)
+      .get(key: "sub")
+    assert(fromRoot.tests.keys == ["TestValue"], "root snapshot lost its test")
+    assert(fromRoot.tests(source: nested).keys == [], "added nested module did not change ownership")
+    assert(fromRoot.tests.keys == ["TestValue"], "override changed the original snapshot")
+    let fromNested = go(version: "1.26.1", test: ["sub"])
+      .packages(nested.asWorkspace)
+      .get(key: "sub")
+    assert(fromNested.tests.keys == ["TestValue"], "nested snapshot lost its test")
+    assert(fromNested.tests(source: original).keys == [], "removed nested module did not change ownership")
+    null
+  }
+
   let generatedFixturePath: String! = "testdata/go-module-generate"
   let generatedFilePath: String! = generatedFixturePath + "/generated.go"
   let baseFixturePath: String! = "testdata/go-module-custom-base"
@@ -223,7 +299,7 @@ type GoDev {
     let tool = go(version: "1.26.1")
     let packages = tool.packages(ws)
     assert(containsPath(packages.keys, modPath), "package discovery missed " + modPath)
-    let tests = packages.get(key: modPath).tests(ws)
+    let tests = packages.get(key: modPath).tests
     let missing = [
       "TestFixtureFromTestdata",
       "TestGoTestIncludeAnnotation",
@@ -263,6 +339,7 @@ type GoDev {
         func ExampleAlpha() {}
         func Examplefoo() {}
       ``` + "\n")
+      .withNewFile("unicode_test.go", "package root\nimport \"testing\"\nfunc TestÉÉ(t *testing.T) {}\nfunc Test正常(t *testing.T) {}\nfunc TestParameter(т *testing.T) {}\n")
       .withNewFile("constrained_test.go", "//go:build never\n\npackage root\nimport \"testing\"\nfunc TestConstrained(t *testing.T) {}\n")
       .withNewFile("sub/b_test.go", "package sub\nimport \"testing\"\nfunc TestBeta(t *testing.T) {}\nfunc TestAlpha(t *testing.T) {}\n")
       .withNewFile("examples/c_test.go", "package examples\nfunc Example() {}\n")
@@ -276,16 +353,16 @@ type GoDev {
       found.keys == [".", "examples", "nested", "sub"],
       "static package discovery found: " + found.keys.join(", "),
     )
-    let rootNames = found.get(key: ".").tests(rooted).keys
+    let rootNames = found.get(key: ".").tests.keys
     assert(
-      rootNames == ["TestAlpha", "FuzzAlpha", "ExampleAlpha", "TestConstrained"],
+      rootNames == ["TestAlpha", "FuzzAlpha", "ExampleAlpha", "TestConstrained", "TestÉÉ", "Test正常", "TestParameter"],
       "static test discovery found: " + rootNames.join(", "),
     )
-    let subNames = found.get(key: "sub").tests(rooted).keys
+    let subNames = found.get(key: "sub").tests.keys
     assert(subNames == ["TestBeta", "TestAlpha"], "static test discovery in sub found: " + subNames.join(", "))
-    let exampleNames = found.get(key: "examples").tests(rooted).keys
+    let exampleNames = found.get(key: "examples").tests.keys
     assert(exampleNames == ["Example"], "an examples-only package found: " + exampleNames.join(", "))
-    let nestedNames = found.get(key: "nested").tests(rooted).keys
+    let nestedNames = found.get(key: "nested").tests.keys
     assert(nestedNames == ["TestNested"], "the nested module's package found: " + nestedNames.join(", "))
 
     # The same name in two packages runs only where it was selected, and a
@@ -297,11 +374,11 @@ type GoDev {
       .asWorkspace
     let sharedPackages = go(version: "1.26.1").packages(shared)
     run(
-      sharedPackages.get(key: ".").tests(shared).subset(keys: ["TestShared"]).batch.test(shared),
+      sharedPackages.get(key: ".").tests.subset(keys: ["TestShared"]).batch.test(shared),
     )
     let failed = {
       run(
-        sharedPackages.get(key: "sub").tests(shared).get(key: "TestShared").test(shared),
+        sharedPackages.get(key: "sub").tests.get(key: "TestShared").test(shared),
       )
       "no failure"
     } rescue {
