@@ -9,13 +9,19 @@ type GoDev {
     let files = directory
       .withNewFile("go.mod", "module example.com/test-filenames\n\ngo 1.26.1\n")
       .withNewFile("bracket[1]_test.go", "package fixture\nimport \"testing\"\nfunc TestBracket(t *testing.T) {}\n")
+      .withNewFile("middle_test.go", "package fixture\nimport \"testing\"\nfunc TestZulu(t *testing.T) {}\nfunc TestAlpha(t *testing.T) {}\n")
       .withNewFile("normal_test.go", "package fixture\nimport \"testing\"\nfunc TestNormal(t *testing.T) {}\n")
+      .withNewFile("unmatched_test.go", "package fixture\n")
+      .withNewFile("é_test.go", "package fixture\nimport \"testing\"\nfunc TestÉ(t *testing.T) {}\n")
       .withNewFile("link-target.txt", "package fixture\nimport \"testing\"\nfunc TestLinked(t *testing.T) {}\n")
       .withSymlink(target: "link-target.txt", linkName: "linked_test.go")
     let caller = files.asWorkspace
     let tool = go(version: "1.26.1")
     let names = tool.packages(caller).get(key: ".").tests(caller).keys
-    assert(names == ["TestBracket", "TestNormal"], "literal filename tests: " + names.join(", "))
+    assert(
+      names == ["TestBracket", "TestZulu", "TestAlpha", "TestNormal", "TestÉ"],
+      "literal filename tests: " + names.join(", "),
+    )
     let mounted = directory
       .asWorkspace
       .withDirectory("mounted/package", files)

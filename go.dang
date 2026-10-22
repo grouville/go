@@ -793,6 +793,18 @@ type GoModule {
         globs: [if (pkgPath == ".") { "/*_test.go" } else { "/" + pkgPath + "/*_test.go" }],
         pattern: testFunctionPattern,
       ).{{filePath, matchedLines}}
+      testNamesInFiles(files, matches).uniq
+    }
+  }
+
+  # Partition by the sorted filenames, preserving match order within each file.
+  # Each match visits logarithmically many groups instead of every test file.
+  let testNamesInFiles(
+    files: [String!]!,
+    matches: [{{filePath: String!, matchedLines: String!}}!]!,
+  ): [String!]! {
+    let empty: [String!]! = []
+    if (files.length <= 2) {
       files
         .reduce(empty) { names, file =>
           names + matches
@@ -801,7 +813,20 @@ type GoModule {
               match.matchedLines.trimPrefix("func ").split("(").takeFirst(1).join("")
             }
         }
-        .uniq
+    } else {
+      let middle = files.length / 2
+      let pivot = files[middle]!
+      testNamesInFiles(
+        files.takeFirst(middle),
+        matches.filter { match =>
+          match.filePath.trimPrefix("/").trimPrefix("./") < pivot
+        },
+      ) + testNamesInFiles(
+        files.dropFirst(middle),
+        matches.filter { match =>
+          match.filePath.trimPrefix("/").trimPrefix("./") >= pivot
+        },
+      )
     }
   }
 
