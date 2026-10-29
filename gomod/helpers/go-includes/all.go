@@ -23,6 +23,7 @@ func runAll(cliArgs []string) error {
 	flags.Bool("all", false, "compute includes for every module")
 	test := flags.Bool("test", false, "also follow //go:test:include directives")
 	generate := flags.Bool("generate", false, "also follow //go:generate:include directives and go:generate go -C modules")
+	discoveryOnly := flags.Bool("discovery-only", false, "write module, package and test catalogues without source-policy outputs")
 	root := flags.String("root", ".", "workspace root to scan")
 	outputDir := flags.String("output-dir", "", "directory to write one file of include patterns per module to")
 	if err := flags.Parse(cliArgs); err != nil {
@@ -31,10 +32,19 @@ func runAll(cliArgs []string) error {
 	if *outputDir == "" {
 		return fmt.Errorf("--output-dir is required")
 	}
+	if *discoveryOnly && (*test || *generate) {
+		return fmt.Errorf("--discovery-only cannot be combined with --test or --generate")
+	}
 
 	index, err := indexLocal(*root)
 	if err != nil {
 		return err
+	}
+	if *discoveryOnly {
+		if err := writeModuleOutput(*outputDir, "_modules_", linesWithTrailer(index.goModules())); err != nil {
+			return err
+		}
+		return index.writeDiscovery(filepath.Join(*outputDir, discoveryFile))
 	}
 	return index.writeAllDir(*outputDir, *test, *generate)
 }

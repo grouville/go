@@ -249,7 +249,8 @@ type Gomod {
   let scanner(ws: Workspace!): Container! {
     # No cache volumes: the scan is an ordinary result, which another engine
     # can pull from the remote cache.
-    container.from("golang:" + scannerVersion + "-alpine")
+    container
+      .from("golang:" + scannerVersion + "-alpine")
       # The same download retry as withGoCaches.
       .withEnvVariable("GOPROXY", "https://proxy.golang.org|https://proxy.golang.org|direct")
       .withoutEntrypoint
@@ -278,6 +279,16 @@ type Gomod {
     let generateFlags = if (generate) { ["--generate"] } else { [] }
     scanner(ws)
       .withExec(["go-includes", "--all", "--output-dir", "/output"] + testFlags + generateFlags)
+      .directory("/output")
+  }
+
+  """
+  Module, package and test catalogues for collection discovery. Source policies
+  and the packed Go headers are computed by scan when an operation needs them.
+  """
+  discovery(ws: Workspace!): Directory! {
+    scanner(ws)
+      .withExec(["go-includes", "--all", "--discovery-only", "--output-dir", "/output"])
       .directory("/output")
   }
 
@@ -564,9 +575,11 @@ type GoMod {
       .glob(subpath("**/*.go"))
       .filter { file => file.hasSuffix("/") == false }
       .map { file => file.trimPrefix("/").trimPrefix("./") }
-      .map { file => {{owner: deepestRoot(file, roots), file: file}} }
+      .map { file => {{owner: deepestRoot(file, roots), file}} }
       .filter { pair =>
-        goIgnores(if (pair.owner == ".") { pair.file } else { pair.file.trimPrefix(pair.owner + "/") }) == false
+        goIgnores(if (pair.owner == ".") { pair.file } else {
+          pair.file.trimPrefix(pair.owner + "/")
+        }) == false
       }
     mergeGroups(byModule, grouped(owned))
   }
@@ -600,7 +613,7 @@ type GoMod {
       .dropLast(1)
       .reduce({{dir: "", owner: path}}) { state, segment =>
         let dir = if (state.dir == "") { segment } else { state.dir + "/" + segment }
-        {{dir: dir, owner: if (roots.has(dir)) { dir } else { state.owner }}}
+        {{dir, owner: if (roots.has(dir)) { dir } else { state.owner }}}
       }
       .owner
   }
@@ -690,7 +703,7 @@ type GoMod {
       .dropLast(1)
       .reduce({{dir: "", found: false}}) { state, segment =>
         let dir = if (state.dir == "") { segment } else { state.dir + "/" + segment }
-        {{dir: dir, found: state.found or roots.has(dir)}}
+        {{dir, found: state.found or roots.has(dir)}}
       }
       .found
   }

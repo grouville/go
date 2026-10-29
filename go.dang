@@ -168,12 +168,12 @@ type Go {
   # module, then a "package" line per package directory with something to do.
   # Reading it replaces a search, glob or field read per result.
   let discoveryLines(ws: Workspace!): [String!]! {
-    lib.scan(ws).file("_discovery_").contents.split("\n").filter { line => line != "" }
+    lib.discovery(ws).file("_discovery_").contents.split("\n").filter { line => line != "" }
   }
 
   # A small index points at one immutable catalogue file per module.
   let discoveryIndex(ws: Workspace!): JSONValue! {
-    lib.scan(ws).file("_discovery_index_.json").asJSON
+    lib.discovery(ws).file("_discovery_index_.json").asJSON
   }
 
   let moduleRoots(ws: Workspace!): [String!]! {
@@ -182,7 +182,7 @@ type Go {
 
   let moduleDiscovery(ws: Workspace!, root: String!): JSONValue! {
     let ordinal = JSON.decode(`${discoveryIndex(ws).field(path: ["modules", root]).contents}`) :: Int!
-    lib.scan(ws).file("_discovery_modules_/" + `${ordinal}` + ".json").asJSON
+    lib.discovery(ws).file("_discovery_modules_/" + `${ordinal}` + ".json").asJSON
   }
 
   let moduleDiscoveryLines(ws: Workspace!, root: String!): [String!]! {
